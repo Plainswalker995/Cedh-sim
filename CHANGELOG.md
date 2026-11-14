@@ -16,6 +16,12 @@
   speed.
 - Thassa's Oracle stays in hand as the win condition: cast only when it wins by devotion, the library is
   nearly gone, or Demonic Consultation or Tainted Pact can follow it the same turn.
+- Draw causes: every drawn game is tagged in its play-by-play and the batch summary as an AI mistake (a
+  player held a finished combo, or held threats, engines or tutors with mana to spare) or a natural stall
+  (a lock piece, interaction traded off, everyone out of cards). The scorecard counts both.
+- Fix: `--out` with a relative folder wrote games into Forge's folder.
+- Cheap draw engines (Mystic Remora, Rhystic Study, Esper Sentinel, Necropotence and the like) are deployed early,
+  after fast mana and before the commanders, instead of sitting in hand.
 - Mulligans: after the free first mulligan, a seven is judged against the six it would become, so decent sevens
   are kept.
 - Fix: the loss-reason report crashed on newer game records.

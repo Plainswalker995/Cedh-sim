@@ -104,7 +104,9 @@ Output lands in `games/run-<time>/`: `games/game-NNN.md` (one per game), `summar
 - **Mulligans**: the first mulligan is free, then London. A learned model can decide keeps (below).
 - **Natural variation**: new seed and shuffle per game, several lists per commander when the pool has them,
   three play styles (patient, balanced, aggressive) dealt per seat, and a small slip rate.
-- **Round cap**: games that go past it end as draws and count as draws, as at a tournament.
+- **Round cap**: games that go past it end as draws and count as draws, as at a tournament. Each draw is
+  tagged with its cause: an AI mistake (a finished combo or threats held with mana to spare: a bug to fix) or a
+  natural stall (a lock piece, traded-off interaction, empty hands).
 
 ## The learning layer
 
@@ -133,7 +135,10 @@ hand-written cEDH lines.
   same opponents), not as a prediction of your tournament win rate.
 - Small samples mislead. Every rate comes with its 95% range; a 4-point difference needs a few hundred
   paired games to show.
-- Speed depends on the machine: roughly 15 to 20 games an hour per two cores with search on.
+- Games run long: in early batches far more games hit the round cap as draws than at real events (roughly 1
+  in 5). The scorecard tracks this against real numbers; read win rates with that in mind.
+- Speed depends on the machine: roughly 20 games an hour per parallel job with search on (about 60 an hour
+  on four cores).
 - The opponent pool is only as good as the lists you put in it.
 
 ## License

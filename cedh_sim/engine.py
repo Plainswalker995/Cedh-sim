@@ -57,6 +57,8 @@ def run_batch(hero: Path, pool: Path, n: int, seed: int, out: Path, jobs: int | 
               start: int = 1, opts: dict | None = None, quiet: bool = False) -> list[dict]:
     """Play games start..start+n-1 and return their result records (also kept in out/results.jsonl)."""
     opts = opts or {}
+    out = Path(out).resolve()  # the engine runs in Forge's folder, so a relative path would land there
+    hero, pool = Path(hero).resolve(), Path(pool).resolve()
     jobs = max(1, min(jobs or default_jobs(), n))
     out.mkdir(parents=True, exist_ok=True)
     (out / "games").mkdir(exist_ok=True)

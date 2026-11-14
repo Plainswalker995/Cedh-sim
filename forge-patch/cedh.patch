@@ -64,7 +64,7 @@ index 3d6fffd1..eba827d8 100644
              return null;
          }
 diff --git a/forge-ai/src/main/java/forge/ai/PlayerControllerAi.java b/forge-ai/src/main/java/forge/ai/PlayerControllerAi.java
-index 0cc2d4f1..51fddb58 100644
+index 0cc2d4f1..3813f894 100644
 --- a/forge-ai/src/main/java/forge/ai/PlayerControllerAi.java
 +++ b/forge-ai/src/main/java/forge/ai/PlayerControllerAi.java
 @@ -462,6 +462,10 @@ public class PlayerControllerAi extends PlayerController {
@@ -78,7 +78,7 @@ index 0cc2d4f1..51fddb58 100644
          return getAi().confirmAction(sa, mode, message, params);
      }
  
-@@ -884,10 +888,15 @@ public class PlayerControllerAi extends PlayerController {
+@@ -884,12 +888,25 @@ public class PlayerControllerAi extends PlayerController {
          if (isBasicLandDeckVariant()) {
              return true; // Momir Basic / MoJhoSto: the deck is all basic lands and the avatar does the work, there is nothing to mulligan for
          }
@@ -88,13 +88,24 @@ index 0cc2d4f1..51fddb58 100644
 +        }
          if (brains.useSmartMulligan()) {
              try {
-                 return OpeningHand.keep(player, player.getCardsIn(ZoneType.Hand), cardsToReturn,
+-                return OpeningHand.keep(player, player.getCardsIn(ZoneType.Hand), cardsToReturn,
 -                        firstPlayer == player, brains.deckPlan(player), brains.getIntProperty(AiProps.MULLIGAN_THRESHOLD));
++                final boolean second = forge.ai.simulation.CedhPilot.secondSeven(player, cardsToReturn);
++                final boolean keep = OpeningHand.keep(player, player.getCardsIn(ZoneType.Hand), cardsToReturn,
 +                        firstPlayer == player, brains.deckPlan(player), brains.getIntProperty(AiProps.MULLIGAN_THRESHOLD),
-+                        forge.ai.simulation.CedhPilot.secondSeven(player, cardsToReturn) ? 6 : 0);
++                        second ? 6 : 0);
++                if (forge.ai.simulation.CedhPilot.enabled) {
++                    forge.ai.simulation.CedhPilot.note(player.getGame(), "MULL " + player.getName() + (keep ? " keeps " : " ships ")
++                            + (player.getCardsIn(ZoneType.Hand).size() - cardsToReturn) + (second ? " (second seven)" : "") + ": "
++                            + OpeningHand.explain(player, player.getCardsIn(ZoneType.Hand), firstPlayer == player, brains.deckPlan(player)));
++                }
++                return keep;
              } catch (final RuntimeException e) {
                  // fall back to the standard rule below
++                forge.ai.simulation.CedhPilot.note(player.getGame(), "MULL " + player.getName() + " smart judgment failed: " + e);
              }
+         }
+         return !ComputerUtil.wantMulligan(player, cardsToReturn);
 diff --git a/forge-ai/src/main/java/forge/ai/ability/ChangeZoneAi.java b/forge-ai/src/main/java/forge/ai/ability/ChangeZoneAi.java
 index 386fb095..42adfe7e 100644
 --- a/forge-ai/src/main/java/forge/ai/ability/ChangeZoneAi.java
@@ -131,10 +142,10 @@ index a7d795ed..916947b6 100644
              for (final Player o : ai.getOpponents()) {
 diff --git a/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java b/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java
 new file mode 100644
-index 00000000..d3839710
+index 00000000..8b64bbdb
 --- /dev/null
 +++ b/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java
-@@ -0,0 +1,505 @@
+@@ -0,0 +1,525 @@
 +package forge.ai.simulation;
 +
 +import java.util.ArrayList;
@@ -210,6 +221,7 @@ index 00000000..d3839710
 +            return breach;
 +        }
 +        SpellAbility rock = null;
++        SpellAbility engine = null;
 +        SpellAbility commander = null;
 +        for (final SpellAbility sa : candidates) {
 +            final Card host = sa == null ? null : sa.getHostCard();
@@ -222,6 +234,11 @@ index 00000000..d3839710
 +                        rock = sa;
 +                    }
 +                }
++            } else if (host.isInZone(ZoneType.Hand) && ENGINES.contains(host.getName()) && !controls(ai, host.getName())
++                    && (!"Mystic Remora".equals(host.getName()) || game.getPhaseHandler().getTurn() <= 16)) {
++                if (engine == null && playable(ai, sa)) {
++                    engine = sa;
++                }
 +            } else if (host.isCommander() && host.isInZone(ZoneType.Command) && !host.isLand()) {
 +                if ((commander == null || host.getCMC() < commander.getHostCard().getCMC()) && playable(ai, sa)) {
 +                    commander = sa;
@@ -232,12 +249,20 @@ index 00000000..d3839710
 +            note(game, "PLAN " + ai.getName() + " deploys fast mana: " + rock.getHostCard().getName());
 +            return rock;
 +        }
++        if (engine != null) {
++            note(game, "PLAN " + ai.getName() + " starts a draw engine: " + engine.getHostCard().getName());
++            return engine;
++        }
 +        if (commander != null) {
 +            note(game, "PLAN " + ai.getName() + " casts commander: " + commander.getHostCard().getName());
 +            return commander;
 +        }
 +        return null;
 +    }
++
++    /** Cheap card-draw engines cEDH decks deploy early: the cards that win the long game. */
++    static final java.util.Set<String> ENGINES = java.util.Set.of("Mystic Remora", "Rhystic Study", "Esper Sentinel",
++            "Necropotence", "Sylvan Library", "Phyrexian Arena", "Trouble in Pairs");
 +
 +    static final String BREACH = "Underworld Breach";
 +    static final String LED = "Lion's Eye Diamond";
@@ -636,7 +661,13 @@ index 00000000..d3839710
 +    public static void note(final Game game, final String line) {
 +        final List<String> j = JOURNAL.get(game);
 +        if (j != null) {
-+            j.add("T" + game.getPhaseHandler().getTurn() + " " + line);
++            final String entry = "T" + game.getPhaseHandler().getTurn() + " " + line;
++            synchronized (j) {
++                if (!j.isEmpty() && j.get(j.size() - 1).equals(entry)) {
++                    return; // the same step noted again (a repeated choice): once is enough
++                }
++            }
++            j.add(entry);
 +        }
 +    }
 +}
@@ -738,7 +769,7 @@ index e5121b91..5d1ba84e 100644
  
      /**
 diff --git a/forge-ai/src/main/java/forge/ai/simulation/OpeningHand.java b/forge-ai/src/main/java/forge/ai/simulation/OpeningHand.java
-index 2a4ee9b4..69c57979 100644
+index 2a4ee9b4..6ea2be21 100644
 --- a/forge-ai/src/main/java/forge/ai/simulation/OpeningHand.java
 +++ b/forge-ai/src/main/java/forge/ai/simulation/OpeningHand.java
 @@ -110,6 +110,15 @@ public final class OpeningHand {
@@ -757,8 +788,16 @@ index 2a4ee9b4..69c57979 100644
          final int finalSize = hand.size() - cardsToReturn;
          if (finalSize < mulliganThreshold || hand.isEmpty()) {
              return true; // already too small to be worth going lower
-@@ -127,7 +136,7 @@ public final class OpeningHand {
-             return plan.combos.keepsTutorStormHand(kept, finalSize); // judged as the combo player would, not by the generic score
+@@ -124,10 +133,14 @@ public final class OpeningHand {
+             return false; // no key card, combo piece or good score makes up for a hand that cannot cast anything
+         }
+         if (plan != null && plan.combos.has(ComboPlan.Kind.TUTOR_STORM)) {
+-            return plan.combos.keepsTutorStormHand(kept, finalSize); // judged as the combo player would, not by the generic score
++            // judged as the combo player would, not by the generic score; a cEDH deck is more than its storm plan, so
++            // there a hand with a good generic score is kept too
++            if (plan.combos.keepsTutorStormHand(kept, finalSize) || !CedhPilot.enabled) {
++                return plan.combos.keepsTutorStormHand(kept, finalSize);
++            }
          }
          final double score = score(kept, lib, onPlay, plan);
 -        return score >= keepBar(finalSize);
@@ -766,6 +805,24 @@ index 2a4ee9b4..69c57979 100644
      }
  
      /** For tests and the game log: why a hand is kept or not. */
+@@ -138,6 +151,7 @@ public final class OpeningHand {
+                 + ", playable=" + playable(hand, hand.size())
+                 + ", oneLander=" + dredgeOneLander(hand, plan)
+                 + ", score=" + score(hand, lib, onPlay, plan)
++                + ", stormPlan=" + (plan != null && plan.combos.has(ComboPlan.Kind.TUTOR_STORM))
+                 + ", bar=" + keepBar(hand.size())
+                 + ", libLands=" + lib.lands + "/" + lib.size
+                 + ", handColors=" + handColors(hand);
+@@ -172,7 +186,8 @@ public final class OpeningHand {
+         if (lands == 0) {
+             return false;
+         }
+-        if (lands == 1 && size >= 6 && cheapSources < 2) {
++        // cEDH decks run about 28 lands and a pile of fast mana: one land and one fast mana source is a normal keep
++        if (lands == 1 && size >= 6 && cheapSources < (CedhPilot.enabled ? 1 : 2)) {
+             return false;
+         }
+         return !(size >= 6 && lands >= size - 1);
 diff --git a/forge-gui-desktop/src/main/java/forge/view/CedhSim.java b/forge-gui-desktop/src/main/java/forge/view/CedhSim.java
 new file mode 100644
 index 00000000..691d289d
@@ -1554,12 +1611,14 @@ index 8f1b018d..dd3d7de6 100644
      @SuppressWarnings("deprecation")
 diff --git a/forge-gui/res/ai/Cedh.ai b/forge-gui/res/ai/Cedh.ai
 new file mode 100644
-index 00000000..401c8e61
+index 00000000..3effa8c3
 --- /dev/null
 +++ b/forge-gui/res/ai/Cedh.ai
-@@ -0,0 +1,351 @@
+@@ -0,0 +1,353 @@
 +# The amount of cards at which to stop considering mulligan
 +MULLIGAN_THRESHOLD=4
++# cEDH hand judgment (counts fast mana, tutors and combo pieces, not just lands)
++FLAT_MC_MULLIGAN=true
 +
 +# Aggro preferences (enabling these will generally make the AI attack more aggressively into potential trades)
 +# If the following option is enabled, the AI will generally play aggressively, seeking trades on offense when possible
@@ -1911,12 +1970,14 @@ index 00000000..401c8e61
 +FLAT_MC_REACTIVE=true
 diff --git a/forge-gui/res/ai/CedhAggro.ai b/forge-gui/res/ai/CedhAggro.ai
 new file mode 100644
-index 00000000..8709342a
+index 00000000..11ecbc93
 --- /dev/null
 +++ b/forge-gui/res/ai/CedhAggro.ai
-@@ -0,0 +1,351 @@
+@@ -0,0 +1,353 @@
 +# The amount of cards at which to stop considering mulligan
 +MULLIGAN_THRESHOLD=4
++# cEDH hand judgment (counts fast mana, tutors and combo pieces, not just lands)
++FLAT_MC_MULLIGAN=true
 +
 +# Aggro preferences (enabling these will generally make the AI attack more aggressively into potential trades)
 +# If the following option is enabled, the AI will generally play aggressively, seeking trades on offense when possible
@@ -2268,12 +2329,14 @@ index 00000000..8709342a
 +FLAT_MC_REACTIVE=true
 diff --git a/forge-gui/res/ai/CedhPatient.ai b/forge-gui/res/ai/CedhPatient.ai
 new file mode 100644
-index 00000000..7b733451
+index 00000000..107ea560
 --- /dev/null
 +++ b/forge-gui/res/ai/CedhPatient.ai
-@@ -0,0 +1,351 @@
+@@ -0,0 +1,353 @@
 +# The amount of cards at which to stop considering mulligan
 +MULLIGAN_THRESHOLD=4
++# cEDH hand judgment (counts fast mana, tutors and combo pieces, not just lands)
++FLAT_MC_MULLIGAN=true
 +
 +# Aggro preferences (enabling these will generally make the AI attack more aggressively into potential trades)
 +# If the following option is enabled, the AI will generally play aggressively, seeking trades on offense when possible

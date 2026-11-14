@@ -132,7 +132,8 @@ def doc_text(out: Path, recs: list[dict], meta: dict, deck_note: str) -> str:
              f"Games: {s['games']}; win rate {stats.rate_line(s['wins'], s['games'])}; draws {stats.rate_line(s['draws'], s['games'])}",
              "By seat: " + ", ".join(f"seat {k}: {v['wins']}/{v['games']}" for k, v in s["by_seat"].items()),
              analysis.hand_stats_text(analysis.hand_stats(recs)).splitlines()[1],
-             analysis.loss_text(recs).splitlines()[0], "",
+             analysis.loss_text(recs).splitlines()[0],
+             __import__("cedh_sim.draws", fromlist=["text"]).text(recs).splitlines()[0], "",
              "Game recaps:"]
     lines += ["  " + engine.one_line(r) for r in recs]
     lines += ["", f"Full play-by-play files: {out / 'games'}", f"Full summary and card report: {out / 'summary.md'}"]
@@ -170,10 +171,21 @@ def cmd_auto(a) -> None:
     print(f"Doc text: {out / 'doc.md'}")
 
 
+def draw_causes(out: Path, recs: list[dict]) -> str:
+    """Tag each drawn game's play-by-play with its cause and return the batch lines."""
+    from . import draws
+    roles = draws.roles_for([r for r in recs if not r.get("winner")])
+    for r in recs:
+        c = draws.cause(r, roles)
+        if c and r.get("file"):
+            draws.tag_file(out / r["file"], c)
+    return draws.text(recs)
+
+
 def write_summary(out: Path, recs: list[dict], meta: dict) -> str:
     s = analysis.summary(recs)
     text = "\n\n".join([analysis.summary_text(s), analysis.hand_stats_text(analysis.hand_stats(recs)),
-                        analysis.loss_text(recs),
+                        analysis.loss_text(recs), draw_causes(out, recs),
                         analysis.card_report_text(analysis.card_report(recs), len(recs))])
     recaps = "\n".join(engine.one_line(r) for r in recs)
     settings = (f"Settings: seed {meta['seed']}, round cap {meta['opts'].get('rounds')} turns each, "
@@ -182,7 +194,7 @@ def write_summary(out: Path, recs: list[dict], meta: dict) -> str:
     full = f"{text}\n\n{settings}\n\nGames:\n{recaps}\n"
     (out / "summary.md").write_text(full, encoding="utf-8")
     (out / "summary.json").write_text(json.dumps(s, indent=1, default=list))
-    meta["finished"] = dt.datetime.now().isoformat(timespec="seconds")
+    meta.setdefault("finished", dt.datetime.now().isoformat(timespec="seconds"))
     (out / "run.json").write_text(json.dumps(meta, indent=1))
     print("\n" + analysis.summary_text(s))
     print(f"\nFull summary: {out / 'summary.md'}")

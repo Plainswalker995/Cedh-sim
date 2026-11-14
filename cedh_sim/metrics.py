@@ -226,6 +226,15 @@ def scorecard(run_known: bool = False, run_puzzles: bool = False, games: int = 2
     dr = mm["draw_rate"]
     rd = ref.get("draw_rate")
     lines.append(f"   Draw rate: {'n/a' if dr is None else stats.pct(dr)}" + (f" vs real {stats.pct(rd)}" if rd else ""))
+    if recs:
+        from . import draws
+        dd = [r for r in recs if not r.get("winner")]
+        roles = draws.roles_for(dd)
+        kinds = [draws.cause(r, roles)["kind"] for r in dd]
+        mistakes = kinds.count("AI mistake")
+        lines.append(f"   Draws by cause: AI mistake {mistakes}, natural {kinds.count('natural')} "
+                     f"(natural draw rate {stats.pct(kinds.count('natural') / len(recs))}"
+                     + (f" vs real {stats.pct(rd)}" if rd else "") + "; AI-mistake draws are bugs, target 0)")
     lines.append("   How games end: " + ", ".join(f"{k} {v}" for k, v in sorted(mm["win_types"].items())))
     seat = mm["seat"]
     if seat:
