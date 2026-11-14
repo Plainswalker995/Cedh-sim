@@ -1,17 +1,18 @@
 diff --git a/forge-ai/src/main/java/forge/ai/AiController.java b/forge-ai/src/main/java/forge/ai/AiController.java
-index dd2a6e13..5157cc5f 100644
+index dd2a6e13..4f985287 100644
 --- a/forge-ai/src/main/java/forge/ai/AiController.java
 +++ b/forge-ai/src/main/java/forge/ai/AiController.java
-@@ -2155,6 +2155,8 @@ public class AiController {
+@@ -2155,6 +2155,9 @@ public class AiController {
              final Card h = spellAbility.getHostCard();
              return h != null && ((ComputerUtilCard.isCardRemAIDeck(h) && !flatMc) || ComboAssembly.deadOnArrival(player, spellAbility)
                      || (flatMc && LoopRunner.held(player, spellAbility))
 +                    || (flatMc && ConsultationWin.heldForOracle(player, spellAbility))
++                    || (flatMc && ConsultationWin.heldWinner(player, spellAbility))
 +                    || (flatMc && forge.ai.simulation.CedhPilot.heldForBreach(player, spellAbility))
                      || (flatMc && SurpriseEntry.isEntryAbility(spellAbility) && !SurpriseEntry.offered(player, spellAbility))
                      || (flatMc && FlatMonteCarloPicker.needlessTrick(player, spellAbility))
                      || (flatMc && SpecialActions.waitsForCombat(player, spellAbility))
-@@ -2171,7 +2173,7 @@ public class AiController {
+@@ -2171,7 +2174,7 @@ public class AiController {
          if (!skipped.isEmpty())
              saList.removeAll(skipped);
  
@@ -20,7 +21,7 @@ index dd2a6e13..5157cc5f 100644
              final SpellAbility vault = VaultLoop.sureCast(player, saList);
              if (vault != null) {
                  return vault; // Time Vault and what untaps it: an extra turn every turn, no rollouts needed
-@@ -2222,6 +2224,10 @@ public class AiController {
+@@ -2222,6 +2225,10 @@ public class AiController {
                  return assembly; // a catalogued combo whose other cards are all in play or in hand: put it together
              }
          }
@@ -31,7 +32,7 @@ index dd2a6e13..5157cc5f 100644
          if (flatMc && game.getStack().isEmpty()) {
              // Stiflenought: the Dreadnought is cast as soon as its Stifle can be paid for as well, without rollouts
              final SpellAbility sureStifle = StifleCombo.sureCast(player, saList);
-@@ -3636,6 +3642,13 @@ public class AiController {
+@@ -3636,6 +3643,13 @@ public class AiController {
              return simPicker.chooseCardToHiddenOriginChangeZone(destination, origin, sa, fetchList, player2, decider);
          }
  
@@ -63,7 +64,7 @@ index 3d6fffd1..eba827d8 100644
              return null;
          }
 diff --git a/forge-ai/src/main/java/forge/ai/PlayerControllerAi.java b/forge-ai/src/main/java/forge/ai/PlayerControllerAi.java
-index 0cc2d4f1..15994a90 100644
+index 0cc2d4f1..51fddb58 100644
 --- a/forge-ai/src/main/java/forge/ai/PlayerControllerAi.java
 +++ b/forge-ai/src/main/java/forge/ai/PlayerControllerAi.java
 @@ -462,6 +462,10 @@ public class PlayerControllerAi extends PlayerController {
@@ -77,7 +78,7 @@ index 0cc2d4f1..15994a90 100644
          return getAi().confirmAction(sa, mode, message, params);
      }
  
-@@ -884,6 +888,10 @@ public class PlayerControllerAi extends PlayerController {
+@@ -884,10 +888,15 @@ public class PlayerControllerAi extends PlayerController {
          if (isBasicLandDeckVariant()) {
              return true; // Momir Basic / MoJhoSto: the deck is all basic lands and the avatar does the work, there is nothing to mulligan for
          }
@@ -88,6 +89,12 @@ index 0cc2d4f1..15994a90 100644
          if (brains.useSmartMulligan()) {
              try {
                  return OpeningHand.keep(player, player.getCardsIn(ZoneType.Hand), cardsToReturn,
+-                        firstPlayer == player, brains.deckPlan(player), brains.getIntProperty(AiProps.MULLIGAN_THRESHOLD));
++                        firstPlayer == player, brains.deckPlan(player), brains.getIntProperty(AiProps.MULLIGAN_THRESHOLD),
++                        forge.ai.simulation.CedhPilot.secondSeven(player, cardsToReturn) ? 6 : 0);
+             } catch (final RuntimeException e) {
+                 // fall back to the standard rule below
+             }
 diff --git a/forge-ai/src/main/java/forge/ai/ability/ChangeZoneAi.java b/forge-ai/src/main/java/forge/ai/ability/ChangeZoneAi.java
 index 386fb095..42adfe7e 100644
 --- a/forge-ai/src/main/java/forge/ai/ability/ChangeZoneAi.java
@@ -124,10 +131,10 @@ index a7d795ed..916947b6 100644
              for (final Player o : ai.getOpponents()) {
 diff --git a/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java b/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java
 new file mode 100644
-index 00000000..3a9e9f82
+index 00000000..d3839710
 --- /dev/null
 +++ b/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java
-@@ -0,0 +1,490 @@
+@@ -0,0 +1,505 @@
 +package forge.ai.simulation;
 +
 +import java.util.ArrayList;
@@ -598,6 +605,21 @@ index 00000000..3a9e9f82
 +        return keep;
 +    }
 +
++    private static final Map<Player, Integer> SEVEN_LOOKS = Collections.synchronizedMap(new WeakHashMap<>());
++
++    /**
++     * Whether this is a seven-card look after the free first mulligan is used: shipping it costs a card, so the hand
++     * is weighed against a six-card hand's bar (cEDH players keep most functional sevens here).
++     */
++    public static boolean secondSeven(final Player ai, final int cardsToReturn) {
++        if (!enabled || ai == null || cardsToReturn != 0) {
++            return false;
++        }
++        final int looks = SEVEN_LOOKS.getOrDefault(ai, 0);
++        SEVEN_LOOKS.put(ai, looks + 1);
++        return looks >= 1;
++    }
++
 +    private static final Map<Player, Integer> MULL_CALLS = Collections.synchronizedMap(new WeakHashMap<>());
 +
 +    private static final Map<Game, List<String>> JOURNAL = Collections.synchronizedMap(new WeakHashMap<>());
@@ -619,10 +641,10 @@ index 00000000..3a9e9f82
 +    }
 +}
 diff --git a/forge-ai/src/main/java/forge/ai/simulation/ConsultationWin.java b/forge-ai/src/main/java/forge/ai/simulation/ConsultationWin.java
-index e5121b91..9d4e6994 100644
+index e5121b91..5d1ba84e 100644
 --- a/forge-ai/src/main/java/forge/ai/simulation/ConsultationWin.java
 +++ b/forge-ai/src/main/java/forge/ai/simulation/ConsultationWin.java
-@@ -57,16 +57,58 @@ public final class ConsultationWin {
+@@ -57,16 +57,91 @@ public final class ConsultationWin {
                  && isEnterWinner(top.getHostCard());
      }
  
@@ -667,6 +689,39 @@ index e5121b91..9d4e6994 100644
 +        return false;
 +    }
 +
++    /**
++     * Thassa's Oracle (or the like) stays in hand as the win condition: it is cast only when it wins on its own
++     * (devotion to blue covers the library), when the library is nearly gone, or when the Consultation or the Pact can
++     * be cast with it this turn (the sure line). Casting it as a 1/3 that scries throws the win away.
++     */
++    public static boolean heldWinner(final Player ai, final SpellAbility sa) {
++        if (ai == null || sa == null || !sa.isSpell()) {
++            return false;
++        }
++        final Card host = sa.getHostCard();
++        if (host == null || !host.isInZone(ZoneType.Hand) || !isEnterWinner(host)) {
++            return false;
++        }
++        final int library = ai.getCardsIn(ZoneType.Library).size();
++        if (library <= LIBRARY_MAX) {
++            return false;
++        }
++        int devotion = ai.getDevotionMod() + 1; // the Oracle's own pip
++        for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
++            for (final forge.card.mana.ManaCostShard sh : c.getManaCost()) {
++                if (sh.isColor(forge.card.MagicColor.BLUE)) {
++                    devotion++;
++                }
++            }
++        }
++        if (devotion >= library) {
++            return false;
++        }
++        final SpellAbility consultation = consultationIn(ai);
++        return consultation == null
++                || forge.ai.ComputerUtilMana.getAvailableManaEstimate(ai) < host.getCMC() + consultation.getHostCard().getCMC();
++    }
++
 +    /** Tainted Pact answering the Oracle's trigger: take no card, so that the whole library is exiled. */
 +    public static boolean declinePactTake(final Player ai, final SpellAbility sa) {
 +        if (ai == null || sa == null || sa.getHostCard() == null || !"Tainted Pact".equals(sa.getHostCard().getName())) {
@@ -682,12 +737,41 @@ index e5121b91..9d4e6994 100644
      }
  
      /**
+diff --git a/forge-ai/src/main/java/forge/ai/simulation/OpeningHand.java b/forge-ai/src/main/java/forge/ai/simulation/OpeningHand.java
+index 2a4ee9b4..69c57979 100644
+--- a/forge-ai/src/main/java/forge/ai/simulation/OpeningHand.java
++++ b/forge-ai/src/main/java/forge/ai/simulation/OpeningHand.java
+@@ -110,6 +110,15 @@ public final class OpeningHand {
+     /** Whether to keep the hand; {@code cardsToReturn} are what the mulligan rule makes the player put back. */
+     public static boolean keep(final Player ai, final CardCollectionView hand, final int cardsToReturn,
+                                final boolean onPlay, final DeckPlan plan, final int mulliganThreshold) {
++        return keep(ai, hand, cardsToReturn, onPlay, plan, mulliganThreshold, 0);
++    }
++
++    /**
++     * As above; a non-zero barSize judges the hand against the bar of that hand size instead of its own (a second
++     * seven after the free multiplayer mulligan is weighed against the six it would become).
++     */
++    public static boolean keep(final Player ai, final CardCollectionView hand, final int cardsToReturn,
++                               final boolean onPlay, final DeckPlan plan, final int mulliganThreshold, final int barSize) {
+         final int finalSize = hand.size() - cardsToReturn;
+         if (finalSize < mulliganThreshold || hand.isEmpty()) {
+             return true; // already too small to be worth going lower
+@@ -127,7 +136,7 @@ public final class OpeningHand {
+             return plan.combos.keepsTutorStormHand(kept, finalSize); // judged as the combo player would, not by the generic score
+         }
+         final double score = score(kept, lib, onPlay, plan);
+-        return score >= keepBar(finalSize);
++        return score >= keepBar(barSize > 0 ? barSize : finalSize);
+     }
+ 
+     /** For tests and the game log: why a hand is kept or not. */
 diff --git a/forge-gui-desktop/src/main/java/forge/view/CedhSim.java b/forge-gui-desktop/src/main/java/forge/view/CedhSim.java
 new file mode 100644
-index 00000000..1a3fc2a6
+index 00000000..691d289d
 --- /dev/null
 +++ b/forge-gui-desktop/src/main/java/forge/view/CedhSim.java
-@@ -0,0 +1,750 @@
+@@ -0,0 +1,756 @@
 +package forge.view;
 +
 +import java.io.File;
@@ -1208,6 +1292,12 @@ index 00000000..1a3fc2a6
 +        final List<String> seats = new ArrayList<>();
 +        for (final Player pl : game.getRegisteredPlayers()) {
 +            seats.add(pl.getName());
++        }
++        // seats in turn order: Forge picks who goes first, so the list starts at the starting player
++        final Player starter = game.getStartingPlayer();
++        final int at = starter == null ? -1 : seats.indexOf(starter.getName());
++        if (at > 0) {
++            Collections.rotate(seats, -at);
 +        }
 +
 +        // per-player stats from the log

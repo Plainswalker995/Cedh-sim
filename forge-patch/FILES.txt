@@ -1,13 +1,14 @@
- forge-ai/src/main/java/forge/ai/AiController.java  |  15 +-
+ forge-ai/src/main/java/forge/ai/AiController.java  |  16 +-
  forge-ai/src/main/java/forge/ai/ComputerUtil.java  |   6 +
- .../src/main/java/forge/ai/PlayerControllerAi.java |   8 +
+ .../src/main/java/forge/ai/PlayerControllerAi.java |  11 +-
  .../main/java/forge/ai/ability/ChangeZoneAi.java   |   6 +
  .../src/main/java/forge/ai/ability/MillAi.java     |   6 +
- .../main/java/forge/ai/simulation/CedhPilot.java   | 490 ++++++++++++++
- .../java/forge/ai/simulation/ConsultationWin.java  |  44 +-
- .../src/main/java/forge/view/CedhSim.java          | 750 +++++++++++++++++++++
+ .../main/java/forge/ai/simulation/CedhPilot.java   | 505 ++++++++++++++
+ .../java/forge/ai/simulation/ConsultationWin.java  |  77 ++-
+ .../main/java/forge/ai/simulation/OpeningHand.java |  11 +-
+ .../src/main/java/forge/view/CedhSim.java          | 756 +++++++++++++++++++++
  .../src/main/java/forge/view/Main.java             |   6 +-
  forge-gui/res/ai/Cedh.ai                           | 351 ++++++++++
  forge-gui/res/ai/CedhAggro.ai                      | 351 ++++++++++
  forge-gui/res/ai/CedhPatient.ai                    | 351 ++++++++++
- 12 files changed, 2381 insertions(+), 3 deletions(-)
+ 13 files changed, 2448 insertions(+), 5 deletions(-)

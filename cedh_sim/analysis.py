@@ -191,7 +191,8 @@ def loss_tags(r: dict) -> list[str]:
             opp_casts |= set(st.get("cast") or [])
     if (opp_board | opp_casts) & STAX and len(hs.get("cast") or []) <= 6:
         tags.append("stax-locked")
-    if (hs.get("lands") or 0) <= 2 or len(hs.get("cast") or []) <= 3:
+    lands = hs.get("lands") or 0
+    if (len(lands) if isinstance(lands, list) else lands) <= 2 or len(hs.get("cast") or []) <= 3:
         tags.append("stumbled")
     if (r.get("winner_turns") or 99) <= 4:
         tags.append("out-raced (fast win)")
