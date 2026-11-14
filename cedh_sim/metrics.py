@@ -1,6 +1,7 @@
 """The trust scorecard, in priority order:
 
-1. Known-answer tests (blocking): obvious swaps must come out right.
+1. Known-answer tests (blocking): obvious swaps must come out right (the combo package for Islands must test
+   worse; an Island for a Snow-Covered Island must test the same).
 2. Combo conversion: when the pilot has a winning line, how often it takes it (puzzles).
 3. Meta match: sim results by commander against real tournament data; win turn, draws, win types.
 4. Seat effect: how much going first helps, against real events.
@@ -23,7 +24,10 @@ RUNS = ROOT / "games"
 PUZZLES = ROOT / "puzzles"
 KNOWN = [
     # name, card out, card in, expected verdict
-    ("oracle-for-island", "Thassa's Oracle", "Island", "worse"),
+    # the whole Thassa's Oracle and Breach package out for Islands: a big, certain loss of strength, so the test
+    # settles in a few dozen paired games even at a low win rate (one card at a time needs hundreds)
+    ("combo-for-islands", "Thassa's Oracle; Demonic Consultation; Tainted Pact; Underworld Breach; "
+                          "Lion's Eye Diamond; Brain Freeze", "Island", "worse"),
     ("island-for-snow-island", "Island", "Snow-Covered Island", "same"),
 ]
 KNOWN_SEED = 20261114

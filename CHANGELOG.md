@@ -20,6 +20,10 @@
   player held a finished combo, or held threats, engines or tutors with mana to spare) or a natural stall
   (a lock piece, interaction traded off, everyone out of cards). The scorecard counts both.
 - Fix: `--out` with a relative folder wrote games into Forge's folder.
+- Open mana is used: in the second main phase a pilot casts the biggest threat, engine or other permanent it
+  can afford instead of ending the turn holding it (combo pieces stay held for their line).
+- Tutors no longer sit in hand: Vampiric Tutor, Imperial Seal, Mystical and Worldly Tutor fetch the missing half
+  of the Thassa's Oracle line, and with neither half in hand a tutor starts the line with the Oracle.
 - Cheap draw engines (Mystic Remora, Rhystic Study, Esper Sentinel, Necropotence and the like) are deployed early,
   after fast mana and before the commanders, instead of sitting in hand.
 - Mulligans: after the free first mulligan, a seven is judged against the six it would become, so decent sevens

@@ -218,20 +218,28 @@ def cmd_report(a) -> None:
 
 
 def swap_deck(base: Path, out_card: str, in_card: str) -> Path:
+    """The deck with out_card replaced by in_card. Several cards can go out at once, separated by ';'
+    (each replaced by one in_card)."""
     from . import cardnames
     from .decks import load_dck
     d = load_dck(base)
-    oc, ic = cardnames.resolve(out_card), cardnames.resolve(in_card)
+    ic = cardnames.resolve(in_card)
     if ic is None:
         raise SystemExit(f"Forge doesn't know '{in_card}'.")
-    if oc not in d.main:
-        raise SystemExit(f"'{out_card}' is not in the deck.")
-    d.main[oc] -= 1
-    if d.main[oc] <= 0:
-        del d.main[oc]
-    d.main[ic] = d.main.get(ic, 0) + 1
+    outs = [x.strip() for x in out_card.split(";") if x.strip()]
+    names = []
+    for o in outs:
+        oc = cardnames.resolve(o)
+        if oc not in d.main:
+            raise SystemExit(f"'{o}' is not in the deck.")
+        d.main[oc] -= 1
+        if d.main[oc] <= 0:
+            del d.main[oc]
+        d.main[ic] = d.main.get(ic, 0) + 1
+        names.append(oc)
     d.name = d.name  # same player name, so the reports line up
-    slug = re.sub(r"[^a-z0-9]+", "-", f"{base.stem} {oc} to {ic}".lower()).strip("-")
+    label = names[0] if len(names) == 1 else f"{len(names)} cards"
+    slug = re.sub(r"[^a-z0-9]+", "-", f"{base.stem} {label} to {ic}".lower()).strip("-")
     return write_dck(d, ROOT / "cache" / "decks" / f"{slug}.dck")
 
 

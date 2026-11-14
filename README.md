@@ -119,8 +119,9 @@ hand-written cEDH lines.
 
 ## The trust scorecard
 
-1. **Known-answer tests** (blocking): cutting Thassa's Oracle for an Island must test worse; swapping an
-   Island for a Snow-Covered Island must test the same. Needs a deck with Thassa's Oracle.
+1. **Known-answer tests** (blocking): cutting the combo package (Thassa's Oracle, Demonic Consultation, Tainted
+   Pact, Underworld Breach, Lion's Eye Diamond, Brain Freeze) for Islands must test worse; swapping an Island for
+   a Snow-Covered Island must test the same. Needs a deck with those cards.
 2. **Combo conversion**: set-up positions (`puzzles/`) where a win is on the table: how often the pilot takes it.
 3. **Meta match**: sim win rate by commander against its real meta share, average win turn, draw rate, how
    games end.

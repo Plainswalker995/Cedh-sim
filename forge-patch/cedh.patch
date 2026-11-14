@@ -142,10 +142,10 @@ index a7d795ed..916947b6 100644
              for (final Player o : ai.getOpponents()) {
 diff --git a/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java b/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java
 new file mode 100644
-index 00000000..8b64bbdb
+index 00000000..6800e2b6
 --- /dev/null
 +++ b/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java
-@@ -0,0 +1,525 @@
+@@ -0,0 +1,586 @@
 +package forge.ai.simulation;
 +
 +import java.util.ArrayList;
@@ -257,12 +257,40 @@ index 00000000..8b64bbdb
 +            note(game, "PLAN " + ai.getName() + " casts commander: " + commander.getHostCard().getName());
 +            return commander;
 +        }
-+        return null;
++        return useMana(ai, candidates);
++    }
++
++    /**
++     * Second main phase with mana still open: a threat, engine or other permanent sitting in hand goes down rather
++     * than the mana going to waste (the main cause of drawn games was players ending them holding castable
++     * permanents). Combo pieces stay in hand for their line; instants and sorceries are left to the search.
++     */
++    static SpellAbility useMana(final Player ai, final List<SpellAbility> candidates) {
++        final Game game = ai.getGame();
++        if (!game.getPhaseHandler().is(PhaseType.MAIN2)) {
++            return null;
++        }
++        SpellAbility best = null;
++        for (final SpellAbility sa : candidates) {
++            final Card host = sa == null ? null : sa.getHostCard();
++            if (host == null || !sa.isSpell() || !host.isInZone(ZoneType.Hand) || !host.isPermanent() || host.isLand()
++                    || LOOP_PIECES.contains(host.getName()) || WINNERS.contains(host.getName())
++                    || host.getCMC() < 1 || !playable(ai, sa)) {
++                continue;
++            }
++            if (best == null || host.getCMC() > best.getHostCard().getCMC()) {
++                best = sa;
++            }
++        }
++        if (best != null) {
++            note(game, "PLAN " + ai.getName() + " uses open mana: " + best.getHostCard().getName());
++        }
++        return best;
 +    }
 +
 +    /** Cheap card-draw engines cEDH decks deploy early: the cards that win the long game. */
 +    static final java.util.Set<String> ENGINES = java.util.Set.of("Mystic Remora", "Rhystic Study", "Esper Sentinel",
-+            "Necropotence", "Sylvan Library", "Phyrexian Arena", "Trouble in Pairs");
++            "Necropotence", "Sylvan Library", "Phyrexian Arena", "Trouble in Pairs", "The One Ring");
 +
 +    static final String BREACH = "Underworld Breach";
 +    static final String LED = "Lion's Eye Diamond";
@@ -395,30 +423,63 @@ index 00000000..8b64bbdb
 +     * mana left to cast both halves this turn.
 +     */
 +    static SpellAbility tutorForOracle(final Player ai, final List<SpellAbility> candidates) {
-+        final String want = missingOracleHalf(ai);
++        String want = missingOracleHalf(ai);
++        boolean fresh = false;
++        if (want == null && !anyIn(ai, WINNERS, ZoneType.Hand) && !anyIn(ai, EMPTIERS, ZoneType.Hand)
++                && !ai.cantWin() && ai.getCardsIn(ZoneType.Library).size() > 7
++                && anyIn(ai, java.util.Collections.singleton(ORACLE), ZoneType.Library)
++                && anyIn(ai, EMPTIERS, ZoneType.Library)) {
++            // neither half in hand: a tutor starts the line with the Oracle, the next tutor or draw finds the rest
++            want = ORACLE;
++            fresh = true;
++        }
 +        if (want == null || !anyIn(ai, java.util.Collections.singleton(want), ZoneType.Library)) {
 +            return null;
 +        }
++        final int mana = forge.ai.ComputerUtilMana.getAvailableManaEstimate(ai);
 +        for (final SpellAbility sa : candidates) {
 +            final Card host = sa == null ? null : sa.getHostCard();
-+            if (host == null || !sa.isSpell() || !host.isInZone(ZoneType.Hand) || !HAND_TUTORS.contains(host.getName())) {
++            if (host == null || !sa.isSpell() || !host.isInZone(ZoneType.Hand)) {
 +                continue;
 +            }
-+            final int need = host.getCMC() + 2 + (ORACLE.equals(want) ? 1 : 0); // Oracle UU plus the emptier, or the reverse
-+            if (forge.ai.ComputerUtilMana.getAvailableManaEstimate(ai) >= need && playable(ai, sa)) {
-+                note(ai.getGame(), "PLAN " + ai.getName() + " tutors for " + want + " to win with Thassa's Oracle");
++            final String name = host.getName();
++            final boolean toHand = HAND_TUTORS.contains(name);
++            final boolean toTop = TOP_TUTORS.contains(name)
++                    && !("Mystical Tutor".equals(name) && ORACLE.equals(want))
++                    && !("Worldly Tutor".equals(name) && !ORACLE.equals(want));
++            if (!toHand && !toTop) {
++                continue;
++            }
++            // to hand with a half already in hand: win this turn, so keep mana for both halves;
++            // otherwise (on top of the library, or a fresh start) the tutor only has to be paid for
++            final int need = toHand && !fresh ? host.getCMC() + 2 + (ORACLE.equals(want) ? 1 : 0) : host.getCMC();
++            if (mana >= need && playable(ai, sa)) {
++                TUTOR_WANT.put(ai, want);
++                note(ai.getGame(), "PLAN " + ai.getName() + " casts " + name + " for " + want
++                        + (fresh ? " to start the Thassa's Oracle line" : " to win with Thassa's Oracle"));
 +                return sa;
 +            }
 +        }
 +        return null;
 +    }
 +
++    /** Tutors that put the card on top of the library: the win comes a draw later. */
++    static final java.util.Set<String> TOP_TUTORS = new java.util.HashSet<>(java.util.Arrays.asList(
++            "Vampiric Tutor", "Imperial Seal", "Mystical Tutor", "Worldly Tutor"));
++
++    private static final Map<Player, String> TUTOR_WANT = Collections.synchronizedMap(new WeakHashMap<>());
++
 +    /** The card a tutor of this player should take for the Oracle line, or null for the usual choice. */
 +    public static Card winTutorPick(final Player decider, final SpellAbility sa, final Iterable<Card> fetchList) {
 +        if (!enabled || decider == null || sa == null || !decider.equals(sa.getActivatingPlayer())) {
 +            return null;
 +        }
-+        final String want = missingOracleHalf(decider);
++        String want = missingOracleHalf(decider);
++        if (want == null) {
++            want = TUTOR_WANT.remove(decider);
++        } else {
++            TUTOR_WANT.remove(decider);
++        }
 +        if (want == null) {
 +            return null;
 +        }
