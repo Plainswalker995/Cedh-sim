@@ -1,0 +1,2494 @@
+diff --git a/forge-ai/src/main/java/forge/ai/AiController.java b/forge-ai/src/main/java/forge/ai/AiController.java
+index dd2a6e13..3a3cb0df 100644
+--- a/forge-ai/src/main/java/forge/ai/AiController.java
++++ b/forge-ai/src/main/java/forge/ai/AiController.java
+@@ -2155,6 +2155,8 @@ public class AiController {
+             final Card h = spellAbility.getHostCard();
+             return h != null && ((ComputerUtilCard.isCardRemAIDeck(h) && !flatMc) || ComboAssembly.deadOnArrival(player, spellAbility)
+                     || (flatMc && LoopRunner.held(player, spellAbility))
++                    || (flatMc && ConsultationWin.heldForOracle(player, spellAbility))
++                    || (flatMc && forge.ai.simulation.CedhPilot.heldForBreach(player, spellAbility))
+                     || (flatMc && SurpriseEntry.isEntryAbility(spellAbility) && !SurpriseEntry.offered(player, spellAbility))
+                     || (flatMc && FlatMonteCarloPicker.needlessTrick(player, spellAbility))
+                     || (flatMc && SpecialActions.waitsForCombat(player, spellAbility))
+@@ -2171,7 +2173,7 @@ public class AiController {
+         if (!skipped.isEmpty())
+             saList.removeAll(skipped);
+ 
+-        if (flatMc) {
++        if (flatMc && !forge.ai.simulation.CedhPilot.slips(player)) {
+             final SpellAbility vault = VaultLoop.sureCast(player, saList);
+             if (vault != null) {
+                 return vault; // Time Vault and what untaps it: an extra turn every turn, no rollouts needed
+@@ -2222,6 +2224,10 @@ public class AiController {
+                 return assembly; // a catalogued combo whose other cards are all in play or in hand: put it together
+             }
+         }
++        final SpellAbility cedhOpening = forge.ai.simulation.CedhPilot.sureCast(player, saList);
++        if (cedhOpening != null && !hasFailedToCast(cedhOpening)) {
++            return cedhOpening; // cEDH habits: fast mana down, commander out as soon as it can be paid for
++        }
+         if (flatMc && game.getStack().isEmpty()) {
+             // Stiflenought: the Dreadnought is cast as soon as its Stifle can be paid for as well, without rollouts
+             final SpellAbility sureStifle = StifleCombo.sureCast(player, saList);
+diff --git a/forge-ai/src/main/java/forge/ai/ComputerUtil.java b/forge-ai/src/main/java/forge/ai/ComputerUtil.java
+index 3d6fffd1..eba827d8 100644
+--- a/forge-ai/src/main/java/forge/ai/ComputerUtil.java
++++ b/forge-ai/src/main/java/forge/ai/ComputerUtil.java
+@@ -683,6 +683,12 @@ public class ComputerUtil {
+         // don't exile the card we're pumping
+         typeList = ComputerUtilCost.paymentChoicesWithoutTargets(typeList, sa, ai);
+ 
++        // an Underworld Breach loop keeps its own pieces in the graveyard and exiles the rest
++        final CardCollection breachFuel = forge.ai.simulation.CedhPilot.breachFuel(ai, typeList);
++        if (breachFuel != null && breachFuel.size() >= amount) {
++            typeList = breachFuel;
++        }
++
+         if (typeList.size() < amount) {
+             return null;
+         }
+diff --git a/forge-ai/src/main/java/forge/ai/PlayerControllerAi.java b/forge-ai/src/main/java/forge/ai/PlayerControllerAi.java
+index 0cc2d4f1..15994a90 100644
+--- a/forge-ai/src/main/java/forge/ai/PlayerControllerAi.java
++++ b/forge-ai/src/main/java/forge/ai/PlayerControllerAi.java
+@@ -462,6 +462,10 @@ public class PlayerControllerAi extends PlayerController {
+ 
+     @Override
+     public boolean confirmAction(SpellAbility sa, PlayerActionConfirmMode mode, String message, List<String> options, Card cardToShow, Map<String, Object> params) {
++        if (forge.ai.simulation.ConsultationWin.declinePactTake(player, sa)) {
++            forge.ai.simulation.CedhPilot.note(player.getGame(), "LINE " + player.getName() + " Tainted Pact: takes nothing, exiling the library for Thassa's Oracle");
++            return false;
++        }
+         return getAi().confirmAction(sa, mode, message, params);
+     }
+ 
+@@ -884,6 +888,10 @@ public class PlayerControllerAi extends PlayerController {
+         if (isBasicLandDeckVariant()) {
+             return true; // Momir Basic / MoJhoSto: the deck is all basic lands and the avatar does the work, there is nothing to mulligan for
+         }
++        final Boolean learned = forge.ai.simulation.CedhPilot.learnedKeep(player, player.getCardsIn(ZoneType.Hand), cardsToReturn);
++        if (learned != null) {
++            return learned;
++        }
+         if (brains.useSmartMulligan()) {
+             try {
+                 return OpeningHand.keep(player, player.getCardsIn(ZoneType.Hand), cardsToReturn,
+diff --git a/forge-ai/src/main/java/forge/ai/ability/ChangeZoneAi.java b/forge-ai/src/main/java/forge/ai/ability/ChangeZoneAi.java
+index 386fb095..42adfe7e 100644
+--- a/forge-ai/src/main/java/forge/ai/ability/ChangeZoneAi.java
++++ b/forge-ai/src/main/java/forge/ai/ability/ChangeZoneAi.java
+@@ -1565,6 +1565,12 @@ public class ChangeZoneAi extends SpellAbilityAi {
+         if (destination == null) {
+             return fetchList.isEmpty() ? null : ComputerUtilCard.getBestAI(fetchList);
+         }
++        if (ZoneType.Hand.equals(destination) || ZoneType.Library.equals(destination)) {
++            final Card oracleHalf = forge.ai.simulation.CedhPilot.winTutorPick(decider, sa, fetchList);
++            if (oracleHalf != null) {
++                return oracleHalf;
++            }
++        }
+         // an opponent choosing between cards revealed from outside the game (Extrapolate the Impossible, Wish-like
+         // effects with a chooser) hands over the worse one
+         if (player.isOpponentOf(decider) && ZoneType.Hand.equals(destination) && origin.contains(ZoneType.Sideboard)) {
+diff --git a/forge-ai/src/main/java/forge/ai/ability/MillAi.java b/forge-ai/src/main/java/forge/ai/ability/MillAi.java
+index a7d795ed..916947b6 100644
+--- a/forge-ai/src/main/java/forge/ai/ability/MillAi.java
++++ b/forge-ai/src/main/java/forge/ai/ability/MillAi.java
+@@ -91,6 +91,12 @@ public class MillAi extends SpellAbilityAi {
+         final Card source = sa.getHostCard();
+ 
+         if (sa.usesTargeting()) {
++            final Player breachTarget = forge.ai.simulation.CedhPilot.breachMillTarget(ai, sa);
++            if (breachTarget != null) {
++                sa.resetTargets();
++                sa.getTargets().add(breachTarget);
++                return true;
++            }
+             sa.resetTargets();
+             final Map<Player, Integer> list = Maps.newHashMap();
+             for (final Player o : ai.getOpponents()) {
+diff --git a/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java b/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java
+new file mode 100644
+index 00000000..756c567d
+--- /dev/null
++++ b/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java
+@@ -0,0 +1,463 @@
++package forge.ai.simulation;
++
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.List;
++import java.util.Map;
++import java.util.WeakHashMap;
++
++import forge.ai.ComputerUtilCost;
++import forge.game.Game;
++import forge.game.card.Card;
++import forge.game.phase.PhaseHandler;
++import forge.game.phase.PhaseType;
++import forge.game.player.Player;
++import forge.game.spellability.SpellAbility;
++import forge.game.spellability.SpellAbilityStackInstance;
++import forge.game.zone.ZoneType;
++
++/**
++ * cEDH pilot layer: deterministic lines for the fast wins of competitive Commander, checked before the general AI
++ * picks a play, plus a journal of what the pilot tried (shown in the play-by-play).
++ */
++public final class CedhPilot {
++    private CedhPilot() { }
++
++    /** Switched on by the cEDH simulator; off, Forge plays as it always has. */
++    public static volatile boolean enabled = false;
++
++    /**
++     * Human imperfection: the chance, at each decision where a sure winning line is on, that the pilot does not see
++     * it this time (it may still find it with the general search, or on its next priority). 0 for pure-strength tests.
++     */
++    public static volatile double imperfection = 0.0;
++
++    /** Whether the pilot overlooks the sure lines at this decision. Drawn from the game's seeded random source. */
++    public static boolean slips(final Player ai) {
++        if (!enabled || imperfection <= 0 || ai == null) {
++            return false;
++        }
++        return forge.util.MyRandom.getRandom().nextDouble() < imperfection;
++    }
++
++    /** Fast mana the pilot puts down at once: mana rocks of mana value 0 to 2 that need nothing else to work. */
++    private static boolean isFastMana(final Card c) {
++        if (c == null || !c.isArtifact() || c.isCreature() || c.getCMC() > 2 || c.getManaAbilities().isEmpty()) {
++            return false;
++        }
++        final String n = c.getName();
++        // these are combo pieces or need a plan (Lion's Eye Diamond, Lotus Petal are spent, not deployed)
++        return !n.equals("Lion's Eye Diamond") && !n.equals("Lotus Petal") && !n.equals("Mox Diamond")
++                && !n.equals("Chrome Mox") && !n.equals("Jeweled Lotus");
++    }
++
++    /**
++     * The opening habits of cEDH players, before the general AI decides: in your own main phase with an empty stack,
++     * deploy free and cheap mana rocks, then cast the commander(s) as soon as they can be paid for.
++     */
++    public static SpellAbility sureCast(final Player ai, final List<SpellAbility> candidates) {
++        if (!enabled || ai == null || candidates == null || candidates.isEmpty()) {
++            return null;
++        }
++        final Game game = ai.getGame();
++        final PhaseHandler ph = game.getPhaseHandler();
++        if (!ph.isPlayerTurn(ai) || !game.getStack().isEmpty() || !(ph.is(PhaseType.MAIN1) || ph.is(PhaseType.MAIN2))) {
++            return null;
++        }
++        final SpellAbility tutor = tutorForOracle(ai, candidates);
++        if (tutor != null) {
++            return tutor;
++        }
++        final SpellAbility breach = breachLine(ai, candidates);
++        if (breach != null) {
++            return breach;
++        }
++        SpellAbility rock = null;
++        SpellAbility commander = null;
++        for (final SpellAbility sa : candidates) {
++            final Card host = sa == null ? null : sa.getHostCard();
++            if (host == null || !sa.isSpell() || !ai.equals(host.getController()) && !ai.equals(host.getOwner())) {
++                continue;
++            }
++            if (host.isInZone(ZoneType.Hand) && isFastMana(host)) {
++                if (rock == null || host.getCMC() < rock.getHostCard().getCMC()) {
++                    if (playable(ai, sa)) {
++                        rock = sa;
++                    }
++                }
++            } else if (host.isCommander() && host.isInZone(ZoneType.Command) && !host.isLand()) {
++                if ((commander == null || host.getCMC() < commander.getHostCard().getCMC()) && playable(ai, sa)) {
++                    commander = sa;
++                }
++            }
++        }
++        if (rock != null) {
++            note(game, "PLAN " + ai.getName() + " deploys fast mana: " + rock.getHostCard().getName());
++            return rock;
++        }
++        if (commander != null) {
++            note(game, "PLAN " + ai.getName() + " casts commander: " + commander.getHostCard().getName());
++            return commander;
++        }
++        return null;
++    }
++
++    static final String BREACH = "Underworld Breach";
++    static final String LED = "Lion's Eye Diamond";
++    static final String FREEZE = "Brain Freeze";
++    static final String ORACLE = "Thassa's Oracle";
++
++    private static boolean controls(final Player ai, final String name) {
++        for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
++            if (name.equals(c.getName())) {
++                return true;
++            }
++        }
++        return false;
++    }
++
++    private static boolean has(final Player ai, final String name, final ZoneType... zones) {
++        for (final ZoneType z : zones) {
++            for (final Card c : ai.getCardsIn(z)) {
++                if (name.equals(c.getName())) {
++                    return true;
++                }
++            }
++        }
++        return false;
++    }
++
++    /** A playable spell of this name from hand or graveyard (escape under Breach). */
++    private static SpellAbility castOf(final Player ai, final List<SpellAbility> candidates, final String name) {
++        for (final SpellAbility sa : candidates) {
++            final Card host = sa == null ? null : sa.getHostCard();
++            if (host == null || !sa.isSpell() || !name.equals(host.getName())
++                    || !(host.isInZone(ZoneType.Hand) || host.isInZone(ZoneType.Graveyard))) {
++                continue;
++            }
++            if (playable(ai, sa)) {
++                return sa;
++            }
++        }
++        return null;
++    }
++
++    /**
++     * The Underworld Breach line: Breach first when Lion's Eye Diamond and Brain Freeze are at hand, then loop
++     * Diamond and Brain Freeze from the graveyard, milling yourself for fuel and then the table (or yourself out
++     * for Thassa's Oracle).
++     */
++    static SpellAbility breachLine(final Player ai, final List<SpellAbility> candidates) {
++        final Game game = ai.getGame();
++        final boolean freezeNear = has(ai, FREEZE, ZoneType.Hand, ZoneType.Graveyard);
++        if (!controls(ai, BREACH)) {
++            if (freezeNear && has(ai, LED, ZoneType.Hand, ZoneType.Graveyard, ZoneType.Battlefield)
++                    && has(ai, BREACH, ZoneType.Hand) && ai.getCardsIn(ZoneType.Graveyard).size() >= 3) {
++                final SpellAbility b = castOf(ai, candidates, BREACH);
++                if (b != null) {
++                    note(game, "PLAN " + ai.getName() + " sets up the Underworld Breach loop");
++                    return b;
++                }
++            }
++            return null;
++        }
++        if (ai.getCardsIn(ZoneType.Library).size() <= 2 && !ai.cantWin()) {
++            final SpellAbility o = castOf(ai, candidates, ORACLE);
++            if (o != null) {
++                note(game, "PLAN " + ai.getName() + " escapes Thassa's Oracle with an empty library");
++                return o;
++            }
++        }
++        if (!freezeNear) {
++            return null;
++        }
++        if (!controls(ai, LED)) {
++            final SpellAbility l = castOf(ai, candidates, LED);
++            if (l != null) {
++                return l;
++            }
++        }
++        final SpellAbility f = castOf(ai, candidates, FREEZE);
++        if (f != null) {
++            final Player t = breachMillTarget(ai, f);
++            if (t != null) {
++                f.resetTargets();
++                f.getTargets().add(t);
++                note(game, "LINE " + ai.getName() + " Breach loop: Brain Freeze at " + t.getName()
++                        + " (storm " + game.getStack().getSpellsCastThisTurn().size() + ")");
++                return f;
++            }
++        }
++        return null;
++    }
++
++    static final java.util.Set<String> HAND_TUTORS = new java.util.HashSet<>(java.util.Arrays.asList(
++            "Demonic Tutor", "Grim Tutor", "Diabolic Tutor", "Beseech the Mirror"));
++    static final java.util.Set<String> WINNERS = new java.util.HashSet<>(java.util.Arrays.asList(
++            ORACLE, "Laboratory Maniac", "Jace, Wielder of Mysteries"));
++    static final java.util.Set<String> EMPTIERS = new java.util.HashSet<>(java.util.Arrays.asList(
++            "Demonic Consultation", "Tainted Pact"));
++
++    private static boolean anyIn(final Player ai, final java.util.Set<String> names, final ZoneType zone) {
++        for (final Card c : ai.getCardsIn(zone)) {
++            if (names.contains(c.getName())) {
++                return true;
++            }
++        }
++        return false;
++    }
++
++    /** The half of the Oracle line a tutor should find now, or null when it shouldn't: the other half is in hand. */
++    static String missingOracleHalf(final Player ai) {
++        final boolean winner = anyIn(ai, WINNERS, ZoneType.Hand);
++        final boolean emptier = anyIn(ai, EMPTIERS, ZoneType.Hand);
++        if (winner == emptier || ai.cantWin() || ai.getCardsIn(ZoneType.Library).size() <= 7) {
++            return null;
++        }
++        if (winner) {
++            return anyIn(ai, java.util.Collections.singleton("Demonic Consultation"), ZoneType.Library)
++                    ? "Demonic Consultation" : "Tainted Pact";
++        }
++        return ORACLE;
++    }
++
++    /**
++     * Demonic Tutor (or the like) for the missing half of Thassa's Oracle with Consultation or Pact, when there is
++     * mana left to cast both halves this turn.
++     */
++    static SpellAbility tutorForOracle(final Player ai, final List<SpellAbility> candidates) {
++        final String want = missingOracleHalf(ai);
++        if (want == null || !anyIn(ai, java.util.Collections.singleton(want), ZoneType.Library)) {
++            return null;
++        }
++        for (final SpellAbility sa : candidates) {
++            final Card host = sa == null ? null : sa.getHostCard();
++            if (host == null || !sa.isSpell() || !host.isInZone(ZoneType.Hand) || !HAND_TUTORS.contains(host.getName())) {
++                continue;
++            }
++            final int need = host.getCMC() + 2 + (ORACLE.equals(want) ? 1 : 0); // Oracle UU plus the emptier, or the reverse
++            if (forge.ai.ComputerUtilMana.getAvailableManaEstimate(ai) >= need && playable(ai, sa)) {
++                note(ai.getGame(), "PLAN " + ai.getName() + " tutors for " + want + " to win with Thassa's Oracle");
++                return sa;
++            }
++        }
++        return null;
++    }
++
++    /** The card a tutor of this player should take for the Oracle line, or null for the usual choice. */
++    public static Card winTutorPick(final Player decider, final SpellAbility sa, final Iterable<Card> fetchList) {
++        if (!enabled || decider == null || sa == null || !decider.equals(sa.getActivatingPlayer())) {
++            return null;
++        }
++        final String want = missingOracleHalf(decider);
++        if (want == null) {
++            return null;
++        }
++        for (final Card c : fetchList) {
++            if (want.equals(c.getName())) {
++                return c;
++            }
++        }
++        return null;
++    }
++
++    static final java.util.Set<String> LOOP_PIECES = new java.util.HashSet<>(java.util.Arrays.asList(
++            LED, FREEZE, ORACLE, BREACH, "Demonic Consultation", "Tainted Pact"));
++
++    /** The graveyard cards a Breach loop may exile, or null when no loop is running. */
++    public static forge.game.card.CardCollection breachFuel(final Player ai, final forge.game.card.CardCollection options) {
++        if (!enabled || ai == null || !controls(ai, BREACH)) {
++            return null;
++        }
++        final forge.game.card.CardCollection out = new forge.game.card.CardCollection();
++        for (final Card c : options) {
++            if (!LOOP_PIECES.contains(c.getName())) {
++                out.add(c);
++            }
++        }
++        return out;
++    }
++
++    /**
++     * Brain Freeze is a combo piece in a Breach deck: held until Underworld Breach is out, unless one cast already
++     * mills an opponent out.
++     */
++    public static boolean heldForBreach(final Player ai, final SpellAbility sa) {
++        if (!enabled || ai == null || sa == null || sa.getHostCard() == null || !FREEZE.equals(sa.getHostCard().getName())
++                || controls(ai, BREACH)) {
++            return false;
++        }
++        if (!has(ai, BREACH, ZoneType.Hand, ZoneType.Library, ZoneType.Graveyard)) {
++            return false;
++        }
++        final int copies = 3 * (ai.getGame().getStack().getSpellsCastThisTurn().size() + 1);
++        for (final Player o : ai.getOpponents()) {
++            if (o.getCardsIn(ZoneType.Library).size() <= copies) {
++                return false;
++            }
++        }
++        return true;
++    }
++
++    /** Pending mill from Brain Freezes already on the stack, per player. */
++    private static Map<Player, Integer> pendingMill(final Game game) {
++        final Map<Player, Integer> m = new java.util.HashMap<>();
++        for (final SpellAbilityStackInstance si : game.getStack()) {
++            final SpellAbility s = si.getSpellAbility();
++            if (s == null || s.getHostCard() == null || !FREEZE.equals(s.getHostCard().getName()) || s.getTargets() == null) {
++                continue;
++            }
++            for (final Player p : s.getTargets().getTargetPlayers()) {
++                m.merge(p, 3, Integer::sum);
++            }
++        }
++        return m;
++    }
++
++    /**
++     * Who a Brain Freeze (or a copy) should mill while its controller has Underworld Breach out, or null to leave
++     * it to the usual targeting. Fuel first, then yourself out when Thassa's Oracle is at hand, else the table.
++     */
++    public static Player breachMillTarget(final Player ai, final SpellAbility sa) {
++        if (!enabled || ai == null || sa == null || sa.getHostCard() == null
++                || !FREEZE.equals(sa.getHostCard().getName()) || !controls(ai, BREACH)) {
++            return null;
++        }
++        final Map<Player, Integer> pend = pendingMill(ai.getGame());
++        final int myLib = ai.getCardsIn(ZoneType.Library).size() - pend.getOrDefault(ai, 0);
++        final int fuel = ai.getCardsIn(ZoneType.Graveyard).size() + pend.getOrDefault(ai, 0);
++        // with a Thassa's Oracle anywhere but exile, mill yourself out: the Oracle then escapes onto an empty library
++        final boolean oracle = has(ai, ORACLE, ZoneType.Hand, ZoneType.Graveyard, ZoneType.Library) && !ai.cantWin();
++        if (myLib > 0 && sa.canTarget(ai) && (fuel < 30 || oracle)) {
++            return ai;
++        }
++        Player best = null;
++        int bestLeft = 0;
++        for (final Player o : ai.getOpponents()) {
++            final int left = o.getCardsIn(ZoneType.Library).size() - pend.getOrDefault(o, 0);
++            if (left > bestLeft && sa.canTarget(o)) {
++                best = o;
++                bestLeft = left;
++            }
++        }
++        if (best != null) {
++            return best;
++        }
++        return sa.canTarget(ai) ? ai : null;
++    }
++
++    private static boolean playable(final Player ai, final SpellAbility sa) {
++        sa.setActivatingPlayer(ai);
++        return sa.canPlay() && ComputerUtilCost.canPayCost(sa, ai, false);
++    }
++
++    /**
++     * Learned mulligan model (from cedh-sim train): a logistic score of the hand's features. Keep when the predicted
++     * chance to win with this hand is at least the chance the model expects after one more mulligan.
++     * Loaded from a properties file given to the simulator with -model; null: Forge's own rule decides.
++     */
++    public static volatile java.util.Properties mulliganModel = null;
++    /** When set, only this player uses the learned model (for testing a model on one seat). */
++    public static volatile String modelOnly = null;
++
++    public static void loadModel(final String path) {
++        if (path == null) {
++            mulliganModel = null;
++            return;
++        }
++        final java.util.Properties p = new java.util.Properties();
++        try (java.io.Reader r = java.nio.file.Files.newBufferedReader(java.nio.file.Path.of(path))) {
++            p.load(r);
++            mulliganModel = p;
++        } catch (final java.io.IOException e) {
++            System.out.println("Cannot read model " + path + ": " + e);
++        }
++    }
++
++    private static java.util.Set<String> cardSet(final java.util.Properties m, final String key) {
++        final java.util.Set<String> out = new java.util.HashSet<>();
++        for (final String s : m.getProperty(key, "").split("\\|")) {
++            if (!s.isBlank()) {
++                out.add(s.trim());
++            }
++        }
++        return out;
++    }
++
++    private static double w(final java.util.Properties m, final String k) {
++        try {
++            return Double.parseDouble(m.getProperty(k, "0"));
++        } catch (final NumberFormatException e) {
++            return 0;
++        }
++    }
++
++    /** The model's estimated chance to win with a hand of these cards kept at this size. */
++    static double handScore(final java.util.Properties m, final Iterable<Card> hand, final int size) {
++        final java.util.Set<String> fast = cardSet(m, "cards.fast");
++        final java.util.Set<String> tutor = cardSet(m, "cards.tutor");
++        final java.util.Set<String> inter = cardSet(m, "cards.interaction");
++        final java.util.Set<String> combo = cardSet(m, "cards.combo");
++        final java.util.Set<String> draw = cardSet(m, "cards.draw");
++        int lands = 0, nf = 0, nt = 0, ni = 0, nc = 0, nd = 0;
++        for (final Card c : hand) {
++            final String n = c.getName();
++            if (c.isLand()) {
++                lands++;
++            }
++            nf += fast.contains(n) ? 1 : 0;
++            nt += tutor.contains(n) ? 1 : 0;
++            ni += inter.contains(n) ? 1 : 0;
++            nc += combo.contains(n) ? 1 : 0;
++            nd += draw.contains(n) ? 1 : 0;
++        }
++        final double mana = lands + nf;
++        double z = w(m, "bias") + w(m, "w.lands") * lands + w(m, "w.lands2") * lands * lands
++                + w(m, "w.fast") * nf + w(m, "w.tutor") * nt + w(m, "w.interaction") * ni + w(m, "w.combo") * nc
++                + w(m, "w.draw") * nd + w(m, "w.size") * size + w(m, "w.mana_ok") * (mana >= 3 && mana <= 5 ? 1 : 0);
++        return 1.0 / (1.0 + Math.exp(-z));
++    }
++
++    /** Keep or mulligan by the learned model; null when no model is loaded (Forge's own rule decides). */
++    public static Boolean learnedKeep(final Player ai, final Iterable<Card> hand, final int cardsToReturn) {
++        final java.util.Properties m = mulliganModel;
++        if (!enabled || m == null || ai == null || modelOnly != null && !modelOnly.equals(ai.getName())) {
++            return null;
++        }
++        final int size = 7 - cardsToReturn;
++        if (size <= Integer.parseInt(m.getProperty("min_keep", "5"))) {
++            return true;
++        }
++        final double p = handScore(m, hand, size);
++        // what a mulligan is worth: the average chance of a hand one card smaller (the first mulligan is free,
++        // which the caller already reflects in cardsToReturn)
++        final int calls = MULL_CALLS.getOrDefault(ai, 0);
++        MULL_CALLS.put(ai, calls + 1);
++        // the first mulligan of a multiplayer game is free: shipping the first seven gives another seven
++        final double next = w(m, "expect." + (size == 7 && calls == 0 ? 7 : Math.max(1, size - 1)));
++        final boolean keep = p >= next;
++        note(ai.getGame(), "MULL " + ai.getName() + (keep ? " keeps " : " ships ") + size + " (model "
++                + String.format(java.util.Locale.ROOT, "%.2f vs %.2f", p, next) + ")");
++        return keep;
++    }
++
++    private static final Map<Player, Integer> MULL_CALLS = Collections.synchronizedMap(new WeakHashMap<>());
++
++    private static final Map<Game, List<String>> JOURNAL = Collections.synchronizedMap(new WeakHashMap<>());
++
++    public static void resetJournal(final Game game) {
++        JOURNAL.put(game, Collections.synchronizedList(new ArrayList<>()));
++    }
++
++    public static List<String> journal(final Game game) {
++        final List<String> j = JOURNAL.get(game);
++        return j == null ? Collections.emptyList() : new ArrayList<>(j);
++    }
++
++    public static void note(final Game game, final String line) {
++        final List<String> j = JOURNAL.get(game);
++        if (j != null) {
++            j.add("T" + game.getPhaseHandler().getTurn() + " " + line);
++        }
++    }
++}
+diff --git a/forge-ai/src/main/java/forge/ai/simulation/ConsultationWin.java b/forge-ai/src/main/java/forge/ai/simulation/ConsultationWin.java
+index e5121b91..9d4e6994 100644
+--- a/forge-ai/src/main/java/forge/ai/simulation/ConsultationWin.java
++++ b/forge-ai/src/main/java/forge/ai/simulation/ConsultationWin.java
+@@ -57,16 +57,58 @@ public final class ConsultationWin {
+                 && isEnterWinner(top.getHostCard());
+     }
+ 
++    /** Tainted Pact: exiles the top card again and again; declining every card exiles the library (barring a repeat name). */
++    static boolean isPact(final SpellAbility sa) {
++        return sa != null && sa.isSpell() && sa.getApi() == ApiType.Repeat && sa.getHostCard() != null
++                && "Tainted Pact".equals(sa.getHostCard().getName());
++    }
++
++    /** The Consultation, or failing that Tainted Pact, in the hand. */
+     private static SpellAbility consultationIn(final Player ai) {
++        SpellAbility pact = null;
+         for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+             for (final SpellAbility sa : c.getSpellAbilities()) {
+                 if (isConsultation(sa)) {
+                     sa.setActivatingPlayer(ai);
+                     return sa;
+                 }
++                if (pact == null && isPact(sa)) {
++                    sa.setActivatingPlayer(ai);
++                    pact = sa;
++                }
+             }
+         }
+-        return null;
++        return pact;
++    }
++
++    /**
++     * Demonic Consultation or Tainted Pact is held while a Thassa's Oracle (or the like) is in the same hand: it is the
++     * other half of the win, not a tutor. It goes only in response to the winner's own trigger.
++     */
++    public static boolean heldForOracle(final Player ai, final SpellAbility sa) {
++        if (ai == null || sa == null || !(isConsultation(sa) || isPact(sa)) || winnerOnStack(ai.getGame(), ai)) {
++            return false;
++        }
++        for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
++            if (isEnterWinner(c)) {
++                return true;
++            }
++        }
++        return false;
++    }
++
++    /** Tainted Pact answering the Oracle's trigger: take no card, so that the whole library is exiled. */
++    public static boolean declinePactTake(final Player ai, final SpellAbility sa) {
++        if (ai == null || sa == null || sa.getHostCard() == null || !"Tainted Pact".equals(sa.getHostCard().getName())) {
++            return false;
++        }
++        for (final forge.game.spellability.SpellAbilityStackInstance si : ai.getGame().getStack()) {
++            final SpellAbility x = si.getSpellAbility();
++            if (x != null && x.isTrigger() && ai.equals(x.getActivatingPlayer()) && isEnterWinner(x.getHostCard())) {
++                return true;
++            }
++        }
++        return false;
+     }
+ 
+     /**
+diff --git a/forge-gui-desktop/src/main/java/forge/view/CedhSim.java b/forge-gui-desktop/src/main/java/forge/view/CedhSim.java
+new file mode 100644
+index 00000000..1a3fc2a6
+--- /dev/null
++++ b/forge-gui-desktop/src/main/java/forge/view/CedhSim.java
+@@ -0,0 +1,750 @@
++package forge.view;
++
++import java.io.File;
++import java.io.IOException;
++import java.nio.charset.StandardCharsets;
++import java.nio.file.Files;
++import java.nio.file.Path;
++import java.nio.file.StandardOpenOption;
++import java.time.Instant;
++import java.util.*;
++import java.util.concurrent.TimeUnit;
++import java.util.concurrent.TimeoutException;
++import java.util.regex.Matcher;
++import java.util.regex.Pattern;
++
++import com.google.common.eventbus.Subscribe;
++
++import forge.ai.AiProfileUtil;
++import forge.ai.simulation.CedhPilot;
++import forge.deck.Deck;
++import forge.deck.DeckSection;
++import forge.deck.io.DeckSerializer;
++import forge.game.Game;
++import forge.game.GameEndReason;
++import forge.game.GameLogEntry;
++import forge.game.GameLogEntryType;
++import forge.game.GameRules;
++import forge.game.GameType;
++import forge.game.Match;
++import forge.game.card.Card;
++import forge.game.event.GameEvent;
++import forge.game.event.GameEventSpellAbilityCast;
++import forge.game.event.GameEventSpellRemovedFromStack;
++import forge.game.event.GameEventSpellResolved;
++import forge.game.event.GameEventTurnBegan;
++import forge.game.player.GameLossReason;
++import forge.game.player.Player;
++import forge.game.player.PlayerOutcome;
++import forge.game.player.RegisteredPlayer;
++import forge.game.zone.ZoneType;
++import forge.item.PaperCard;
++import forge.model.FModel;
++import forge.player.GamePlayerUtil;
++import forge.util.MyRandom;
++
++/**
++ * cEDH batch simulator: four-player Commander games between AI pilots, under Forge's rules engine.
++ * Two ways to pick the pod:
++ *   fixed:  -d a.dck b.dck c.dck d.dck           (the same four decks every game; -rotate turns the seats)
++ *   pool:   -hero mine.dck -pool dir [-k 3]      (your deck plus k decks drawn at random from dir each game,
++ *                                                 never two decks with the same commander, seats shuffled)
++ * The pod and the seat order come from the game's seed, so a game can be replayed and a swap test plays the
++ * same pods and seats with both versions of a deck.
++ * For every game, as soon as it ends: one line on the console, a JSON line in results.jsonl and a full
++ * play-by-play (every player's hand at the start of each turn, every spell, trigger, combat and life change)
++ * in games/game-NNN.md.
++ */
++public final class CedhSim {
++    private CedhSim() { }
++
++    /** Turns per player before the game is called a draw (0: no cap). */
++    static int roundCap = 0;
++    static final String[] STYLES = { "CedhPatient", "Cedh", "Cedh", "CedhAggro" };
++    /** Seat styles of the game being set up, for the report. */
++    static final List<String> seatStyles = new ArrayList<>();
++
++    static final class Recorder {
++        final Game game;
++        final Map<Integer, Map<String, List<String>>> hands = new HashMap<>();
++        final Map<Integer, String> handsText = new HashMap<>();
++        final Map<String, Integer> turnsTaken = new LinkedHashMap<>();
++        final Map<String, LinkedHashSet<String>> seen = new HashMap<>();
++        final Map<Integer, String[]> casts = new LinkedHashMap<>(); // sa id -> {player, card}
++        final Set<Integer> resolved = new HashSet<>();
++        final Set<Integer> removed = new HashSet<>();
++        Map<String, List<String>> opening;
++        String openingText;
++        List<String> scenario;
++        boolean scenarioApplied;
++        boolean roundCapHit;
++        String heroName;
++
++        Recorder(final Game game) { this.game = game; }
++
++        @Subscribe
++        public void receive(final GameEvent ev) {
++            if (ev instanceof GameEventSpellAbilityCast c && c.sa() != null && c.sa().getHostCard() != null) {
++                if (!c.sa().isSpell()) {
++                    return;
++                }
++                final String who = c.si() == null || c.si().getActivatingPlayer() == null ? "?"
++                        : c.si().getActivatingPlayer().getName();
++                casts.put(c.sa().getId(), new String[] {who, c.sa().getHostCard().getName()});
++                return;
++            }
++            if (ev instanceof GameEventSpellResolved r && r.spell() != null) {
++                resolved.add(r.spell().getId());
++                return;
++            }
++            if (ev instanceof GameEventSpellRemovedFromStack r && r.sa() != null) {
++                removed.add(r.sa().getId());
++                return;
++            }
++            if (!(ev instanceof GameEventTurnBegan tb)) {
++                return;
++            }
++            if (scenario != null && !scenarioApplied) {
++                scenarioApplied = true;
++                applyScenario(game, scenario, heroName);
++            }
++            if (roundCap > 0 && turnsTaken.getOrDefault(tb.turnOwner().getName(), 0) >= roundCap && !game.isGameOver()) {
++                // tournament round over: the game is a draw, as at a real event when time and extra turns run out
++                roundCapHit = true;
++                game.setGameOver(GameEndReason.Draw);
++                return;
++            }
++            turnsTaken.merge(tb.turnOwner().getName(), 1, Integer::sum);
++            final Map<String, List<String>> snap = new LinkedHashMap<>();
++            final StringBuilder sb = new StringBuilder();
++            for (final Player p : game.getPlayers()) {
++                if (p.hasLost()) {
++                    continue;
++                }
++                final List<String> h = new ArrayList<>();
++                for (final Card c : p.getCardsIn(ZoneType.Hand)) {
++                    h.add(c.getName());
++                }
++                snap.put(p.getName(), h);
++                seen.computeIfAbsent(p.getName(), k -> new LinkedHashSet<>()).addAll(h);
++                sb.append("- **").append(p.getName()).append("** (").append(p.getLife()).append(" life, library ")
++                  .append(p.getCardsIn(ZoneType.Library).size()).append(") hand: ")
++                  .append(h.isEmpty() ? "(empty)" : String.join(", ", h)).append('\n');
++            }
++            if (opening == null) {
++                opening = snap;
++                openingText = sb.toString();
++            }
++            hands.put(tb.turnNumber(), snap);
++            handsText.put(tb.turnNumber(), sb.toString());
++        }
++
++        /** Spells that left the stack without resolving: countered (or fizzled), by player. */
++        Map<String, List<String>> countered() {
++            final Map<String, List<String>> out = new HashMap<>();
++            for (final Map.Entry<Integer, String[]> e : casts.entrySet()) {
++                if (removed.contains(e.getKey()) && !resolved.contains(e.getKey())) {
++                    out.computeIfAbsent(e.getValue()[0], k -> new ArrayList<>()).add(e.getValue()[1]);
++                }
++            }
++            return out;
++        }
++    }
++
++    static String names(final Iterable<Card> cards) {
++        final List<String> out = new ArrayList<>();
++        for (final Card c : cards) {
++            out.add(c.getName());
++        }
++        return out.isEmpty() ? "(empty)" : String.join(", ", out);
++    }
++
++    static Set<String> commanders(final Deck d) {
++        final Set<String> out = new TreeSet<>();
++        if (d.has(DeckSection.Commander)) {
++            for (final PaperCard pc : d.get(DeckSection.Commander).toFlatList()) {
++                out.add(pc.getName());
++            }
++        }
++        return out;
++    }
++
++    public static void run(final String[] args) {
++        FModel.initialize(null, null);
++        final Map<String, List<String>> p = parse(args);
++        final boolean poolMode = p.containsKey("hero");
++        if (!poolMode && (!p.containsKey("d") || p.get("d").size() < 2)) {
++            System.out.println("Usage: cedh -hero mine.dck -pool dir [-k 3]   or   cedh -D deckdir -d a.dck b.dck c.dck d.dck\n"
++                    + "  [-n games] [-s seed] [-a profile] [-mc on|max|off] [-c seconds] [-o outdir] [-rotate]"
++                    + " [-scenario file] [-start K] [-rounds R]");
++            return;
++        }
++        final String deckDir = p.containsKey("D") ? p.get("D").get(0) : ".";
++        final int n = p.containsKey("n") ? Integer.parseInt(p.get("n").get(0)) : 1;
++        final long seed = p.containsKey("s") ? Long.parseLong(p.get("s").get(0)) : System.nanoTime() % 1000000;
++        final String profile = p.containsKey("a") ? p.get("a").get(0) : "Cedh";
++        final String mc = p.containsKey("mc") ? p.get("mc").get(0) : "on";
++        final int timeout = p.containsKey("c") ? Integer.parseInt(p.get("c").get(0)) : 900;
++        CedhPilot.enabled = !p.containsKey("plainai");
++        CedhPilot.loadModel(p.containsKey("model") ? p.get("model").get(0) : null);
++        final boolean styles = !p.containsKey("nostyles");
++        CedhPilot.imperfection = p.containsKey("slip") ? Double.parseDouble(p.get("slip").get(0)) : 0.03;
++        roundCap = p.containsKey("rounds") ? Integer.parseInt(p.get("rounds").get(0)) : 0;
++        final Path out = Path.of(p.containsKey("o") ? p.get("o").get(0) : "cedh-out");
++        final boolean rotate = p.containsKey("rotate");
++        final int start = p.containsKey("start") ? Integer.parseInt(p.get("start").get(0)) : 1;
++        final int k = p.containsKey("k") ? Integer.parseInt(p.get("k").get(0)) : 3;
++        String scenarioText = null;
++        if (p.containsKey("scenario")) {
++            try {
++                scenarioText = Files.readString(Path.of(p.get("scenario").get(0)));
++            } catch (final IOException e) {
++                System.out.println("Cannot read scenario: " + e);
++                return;
++            }
++        }
++        if (!AiProfileUtil.getProfilesDisplayList().contains(profile)) {
++            System.out.println("Unknown AI profile " + profile + ". Available: " + AiProfileUtil.getProfilesDisplayList());
++            return;
++        }
++        final List<Deck> fixed = new ArrayList<>();
++        Deck hero = null;
++        final List<Deck> pool = new ArrayList<>();
++        final Map<Set<String>, List<Deck>> poolByCmd = new LinkedHashMap<>();
++        final Map<Set<String>, Double> cmdWeight = new LinkedHashMap<>();
++        if (poolMode) {
++            hero = load(new File(p.get("hero").get(0)));
++            if (hero == null) {
++                return;
++            }
++            CedhPilot.modelOnly = p.containsKey("modelhero") ? hero.getName() : null;
++            final Set<String> heroCmd = commanders(hero);
++            final File[] files = new File(p.containsKey("pool") ? p.get("pool").get(0) : "pool")
++                    .listFiles((dir, name) -> name.endsWith(".dck"));
++            final Map<String, Double> fileWeights = new HashMap<>();
++            final Path wf = Path.of(p.containsKey("pool") ? p.get("pool").get(0) : "pool", "weights.tsv");
++            if (Files.exists(wf)) {
++                try {
++                    for (final String line : Files.readAllLines(wf)) {
++                        final String[] parts = line.split("\t");
++                        if (parts.length >= 2 && !line.startsWith("#")) {
++                            try {
++                                fileWeights.put(parts[0].trim(), Double.parseDouble(parts[1].trim()));
++                            } catch (final NumberFormatException ignored) { }
++                        }
++                    }
++                } catch (final IOException e) {
++                    System.out.println("Cannot read " + wf + ": " + e);
++                }
++            }
++            if (files != null) {
++                Arrays.sort(files);
++                for (final File f : files) {
++                    final Deck d = load(f);
++                    if (d != null && !commanders(d).equals(heroCmd)) {
++                        pool.add(d);
++                        final Set<String> cmd = commanders(d);
++                        poolByCmd.computeIfAbsent(cmd, x -> new ArrayList<>()).add(d);
++                        // a commander's weight is its meta share (the largest given for any of its lists), else 1
++                        final double w = fileWeights.getOrDefault(f.getName(), fileWeights.isEmpty() ? 1.0 : 0.1);
++                        cmdWeight.merge(cmd, w, Math::max);
++                    }
++                }
++            }
++            if (pool.size() < k) {
++                System.out.println("The pool has " + pool.size() + " usable decks; need at least " + k);
++                return;
++            }
++        } else {
++            for (final String d : p.get("d")) {
++                final Deck deck = load(new File(d).isAbsolute() ? new File(d) : new File(deckDir, d));
++                if (deck == null) {
++                    return;
++                }
++                fixed.add(deck);
++            }
++        }
++        try {
++            Files.createDirectories(out.resolve("games"));
++        } catch (final IOException e) {
++            throw new RuntimeException(e);
++        }
++        System.out.println("CEDH-SIM " + (poolMode ? hero.getName() + " vs " + k + " random of " + pool.size() + " pool decks"
++                : fixed.size() + " fixed decks") + ", " + n + " games, seed " + seed + ", profile " + profile
++                + ", flat Monte Carlo " + mc + ", output " + out.toAbsolutePath());
++        for (int g = 0; g < n; g++) {
++            final int gameNo = start + g;
++            final long gameSeed = seed * 1000003L + gameNo;
++            final Random pick = new Random(gameSeed ^ 0x5DEECE66DL);
++            final List<Deck> pod = new ArrayList<>();
++            if (poolMode) {
++                // the opponents and the seats depend on the seed and the pool only, not on the hero's list:
++                // a swap test gets the same pods and seats for both versions of the deck
++                // commanders drawn in proportion to their meta share, never two alike (weighted sampling without
++                // replacement: key u^(1/w), largest keys win); then one of that commander's lists at random
++                final List<Set<String>> cmds = new ArrayList<>(poolByCmd.keySet());
++                final Map<Set<String>, Double> keys = new HashMap<>();
++                for (final Set<String> c : cmds) {
++                    keys.put(c, Math.pow(pick.nextDouble(), 1.0 / Math.max(1e-6, cmdWeight.getOrDefault(c, 1.0))));
++                }
++                cmds.sort((a, b) -> Double.compare(keys.get(b), keys.get(a)));
++                final List<Deck> opps = new ArrayList<>();
++                for (final Set<String> c : cmds) {
++                    if (opps.size() >= k) {
++                        break;
++                    }
++                    final List<Deck> lists = poolByCmd.get(c);
++                    opps.add(lists.get(pick.nextInt(lists.size())));
++                }
++                final int heroSeat = pick.nextInt(opps.size() + 1);
++                Collections.shuffle(opps, pick);
++                pod.addAll(opps);
++                pod.add(heroSeat, hero);
++            } else {
++                final int shift = rotate ? g % fixed.size() : 0;
++                for (int i = 0; i < fixed.size(); i++) {
++                    pod.add(fixed.get((i + shift) % fixed.size()));
++                }
++            }
++            MyRandom.setRandom(new Random(gameSeed));
++            seatStyles.clear();
++            final List<RegisteredPlayer> players = new ArrayList<>();
++            final Set<String> usedNames = new HashSet<>();
++            for (int i = 0; i < pod.size(); i++) {
++                final Deck deck = pod.get(i);
++                String name = deck.getName();
++                while (!usedNames.add(name)) {
++                    name = name + "'";
++                }
++                final RegisteredPlayer rp = RegisteredPlayer.forCommander(deck);
++                // play styles vary per seat and game (drawn from the seed): patient, balanced or aggressive
++                final String seatProfile = styles ? STYLES[pick.nextInt(STYLES.length)] : profile;
++                seatStyles.add(name + "=" + seatProfile);
++                rp.setPlayer(GamePlayerUtil.createAiPlayer(name, i, seatProfile));
++                players.add(rp);
++            }
++            final GameRules rules = new GameRules(GameType.Commander);
++            rules.setAppliedVariants(EnumSet.of(GameType.Commander));
++            rules.setSimTimeout(timeout);
++            final Match match = new Match(rules, players, "cEDH sim");
++            playOne(match, gameNo, gameSeed, mc, timeout, scenarioText, out, hero == null ? null : hero.getName());
++        }
++    }
++
++    private static Deck load(final File f) {
++        final Deck d = f.exists() ? DeckSerializer.fromFile(f) : null;
++        if (d == null) {
++            System.out.println("Could not load deck " + f);
++        }
++        return d;
++    }
++
++    /**
++     * Test scenarios, applied when the first turn begins: lines "p0 hand: A; B" or "p1 battlefield: C; D", where pN is
++     * the Nth player in turn order. Each card comes from that player's library when it is there, or is made new.
++     */
++    static void applyScenario(final Game game, final List<String> lines, final String heroName) {
++        final Pattern re = Pattern.compile("^(p\\d|hero)\\s+(hand|battlefield|graveyard|top)\\s*:\\s*(.*)$", Pattern.CASE_INSENSITIVE);
++        for (final String raw : lines) {
++            final Matcher m = re.matcher(raw.trim());
++            if (!m.matches()) {
++                continue;
++            }
++            Player p = null;
++            if (m.group(1).equalsIgnoreCase("hero")) {
++                for (final Player x : game.getPlayers()) {
++                    if (x.getName().equals(heroName)) {
++                        p = x;
++                    }
++                }
++            } else {
++                final int idx = Integer.parseInt(m.group(1).substring(1));
++                if (idx < game.getPlayers().size()) {
++                    p = game.getPlayers().get(idx);
++                }
++            }
++            if (p == null) {
++                continue;
++            }
++            final String zone = m.group(2).toLowerCase(Locale.ROOT);
++            for (final String nm : m.group(3).split(";")) {
++                final String name = nm.trim();
++                if (name.isEmpty()) {
++                    continue;
++                }
++                Card c = null;
++                for (final Card x : p.getCardsIn(ZoneType.Library)) {
++                    if (x.getName().equals(name)) {
++                        c = x;
++                        break;
++                    }
++                }
++                if (c == null) {
++                    final PaperCard pc = FModel.getMagicDb().getCommonCards().getCard(name);
++                    if (pc == null) {
++                        System.out.println("Scenario: unknown card " + name);
++                        continue;
++                    }
++                    c = Card.fromPaperCard(pc, p);
++                    c.setGameTimestamp(game.getNextTimestamp());
++                    p.getZone(ZoneType.Library).add(c);
++                }
++                switch (zone) {
++                    case "hand" -> game.getAction().moveToHand(c, null);
++                    case "battlefield" -> game.getAction().moveToPlay(c, p, null, null);
++                    case "graveyard" -> game.getAction().moveToGraveyard(c, null);
++                    default -> game.getAction().moveToLibrary(c, 0, null);
++                }
++            }
++        }
++    }
++
++    private static void playOne(final Match match, final int gameNo, final long seed, final String mc, final int timeout,
++            final String scenarioText, final Path out, final String heroName) {
++        final Game game = match.createGame();
++        game.setNoGUIUser();
++        game.AI_FLAT_MONTE_CARLO = !"off".equalsIgnoreCase(mc);
++        game.AI_FLAT_MONTE_CARLO_MAX = "max".equalsIgnoreCase(mc);
++        final Recorder rec = new Recorder(game);
++        rec.heroName = heroName;
++        if (scenarioText != null) {
++            rec.scenario = Arrays.asList(scenarioText.split("\n"));
++        }
++        game.subscribeToEvents(rec);
++        CedhPilot.resetJournal(game);
++        final long t0 = System.currentTimeMillis();
++        boolean timedOut = false;
++        String error = null;
++        try {
++            TimeLimitedCodeBlock.runWithTimeout(() -> match.startGame(game), timeout, TimeUnit.SECONDS);
++        } catch (final TimeoutException e) {
++            timedOut = true;
++        } catch (final Exception | StackOverflowError e) {
++            error = e.toString();
++        } finally {
++            if (!game.isGameOver()) {
++                game.setGameOver(GameEndReason.Draw);
++            }
++        }
++        final long ms = System.currentTimeMillis() - t0;
++        try {
++            report(game, rec, gameNo, seed, ms, timedOut, error, out, heroName);
++        } catch (final IOException e) {
++            System.out.println("Could not write results: " + e);
++        }
++    }
++
++    /** How the winner won, from the outcomes. */
++    static String winType(final Game game, final Player winner) {
++        if (winner == null) {
++            return "draw";
++        }
++        final PlayerOutcome wo = winner.getOutcome();
++        if (wo != null && wo.altWinSourceName != null) {
++            return "alt-win: " + wo.altWinSourceName;
++        }
++        final Map<String, Integer> reasons = new LinkedHashMap<>();
++        for (final Player p : game.getRegisteredPlayers()) {
++            if (p == winner || p.getOutcome() == null || p.getOutcome().lossState == null) {
++                continue;
++            }
++            final GameLossReason r = p.getOutcome().lossState;
++            final String label = switch (r) {
++                case LifeReachedZero -> "damage/life loss";
++                case CommanderDamage -> "commander damage";
++                case Milled -> "milled (drew from empty library)";
++                case Poisoned -> "poison";
++                case SpellEffect -> "lose-the-game effect" + (p.getOutcome().loseConditionSpell != null
++                        ? " (" + p.getOutcome().loseConditionSpell + ")" : "");
++                case Conceded -> "conceded";
++                case OpponentWon -> "opponent won";
++                default -> r.name();
++            };
++            reasons.merge(label, 1, Integer::sum);
++        }
++        return reasons.isEmpty() ? "last player standing" : String.join(" + ", reasons.keySet());
++    }
++
++    static String json(final String s) {
++        if (s == null) {
++            return "null";
++        }
++        final StringBuilder b = new StringBuilder("\"");
++        for (final char c : s.toCharArray()) {
++            switch (c) {
++                case '"' -> b.append("\\\"");
++                case '\\' -> b.append("\\\\");
++                case '\n' -> b.append("\\n");
++                case '\r' -> { }
++                case '\t' -> b.append(' ');
++                default -> b.append(c);
++            }
++        }
++        return b.append('"').toString();
++    }
++
++    static String jsonList(final Collection<String> l) {
++        final StringBuilder b = new StringBuilder("[");
++        boolean first = true;
++        for (final String s : l) {
++            b.append(first ? "" : ",").append(json(s));
++            first = false;
++        }
++        return b.append(']').toString();
++    }
++
++    private static final Pattern CAST = Pattern.compile("^(.+?) cast (.+?)(?: targeting .*)?$");
++    private static final Pattern LAND = Pattern.compile("^(.+?) played (.+?)(?: \\(\\d+\\))?$");
++
++    private static void report(final Game game, final Recorder rec, final int gameNo, final long seed, final long ms,
++            final boolean timedOut, final String error, final Path out, final String heroName) throws IOException {
++        Player winner = null;
++        if (!rec.roundCapHit && !timedOut && !game.getOutcome().isDraw() && game.getOutcome().getWinningLobbyPlayer() != null) {
++            final String wname = game.getOutcome().getWinningLobbyPlayer().getName();
++            for (final Player pl : game.getRegisteredPlayers()) {
++                if (pl.getName().equals(wname)) {
++                    winner = pl;
++                }
++            }
++        }
++        final int turn = game.getPhaseHandler().getTurn();
++        final int seatsN = game.getRegisteredPlayers().size();
++        final int winnerTurns = winner == null ? 0 : rec.turnsTaken.getOrDefault(winner.getName(), 0);
++        final String how = rec.roundCapHit ? "round cap (draw)" : timedOut ? "time limit (draw)"
++                : (error != null ? "engine error (draw)" : winType(game, winner));
++        final List<String> journal = CedhPilot.journal(game);
++        final List<GameLogEntry> log = new ArrayList<>(game.getGameLog().getLogEntries(null));
++        Collections.reverse(log);
++        final List<String> seats = new ArrayList<>();
++        for (final Player pl : game.getRegisteredPlayers()) {
++            seats.add(pl.getName());
++        }
++
++        // per-player stats from the log
++        final Map<String, List<String>> cast = new LinkedHashMap<>();
++        final Map<String, List<String>> lands = new LinkedHashMap<>();
++        final Map<String, Integer> mulligans = new LinkedHashMap<>();
++        for (final String s : seats) {
++            cast.put(s, new ArrayList<>());
++            lands.put(s, new ArrayList<>());
++            mulligans.put(s, 0);
++        }
++        for (final GameLogEntry e : log) {
++            final String m = e.message();
++            if (e.type() == GameLogEntryType.STACK_ADD) {
++                final Matcher mm = CAST.matcher(m);
++                if (mm.matches() && cast.containsKey(mm.group(1))) {
++                    cast.get(mm.group(1)).add(mm.group(2).replaceAll(" \\(\\d+\\)$", ""));
++                }
++            } else if (e.type() == GameLogEntryType.LAND) {
++                final Matcher mm = LAND.matcher(m);
++                if (mm.matches() && lands.containsKey(mm.group(1))) {
++                    lands.get(mm.group(1)).add(mm.group(2));
++                }
++            } else if (e.type() == GameLogEntryType.MULLIGAN && m.contains("mulliganed")) {
++                for (final String s : seats) {
++                    if (m.startsWith(s + " ")) {
++                        mulligans.merge(s, 1, Integer::sum);
++                    }
++                }
++            }
++        }
++        final Map<String, List<String>> countered = rec.countered();
++
++        // ---------- the play-by-play file
++        final StringBuilder md = new StringBuilder();
++        md.append("# Game ").append(gameNo).append(": ").append(String.join(" vs ", seats)).append("\n\n");
++        md.append("## Summary\n\n");
++        md.append("- **Winner:** ").append(winner == null ? "nobody (draw)" : winner.getName()).append('\n');
++        md.append("- **How:** ").append(how).append('\n');
++        if (winner != null) {
++            md.append("- **When:** the winner's turn ").append(winnerTurns).append(" (game turn ").append(turn)
++              .append(", round ").append((turn + seatsN - 1) / seatsN).append(")\n");
++        }
++        if (heroName != null) {
++            final List<String> opps = new ArrayList<>(seats);
++            opps.remove(heroName);
++            md.append("- **Your seat:** ").append(seats.indexOf(heroName) + 1).append(" of ").append(seatsN).append('\n');
++            md.append("- **Opponents drawn:** ").append(String.join(", ", opps)).append('\n');
++        }
++        md.append("- **Turn order:** ").append(String.join(", ", seats)).append('\n');
++        md.append("- **Play styles:** ").append(String.join(", ", seatStyles).replace("=CedhPatient", ": patient")
++                .replace("=CedhAggro", ": aggressive").replace("=Cedh", ": balanced")).append('\n');
++        final List<String> mullTxt = new ArrayList<>();
++        for (final String s : seats) {
++            mullTxt.add(s + " " + mulligans.get(s));
++        }
++        md.append("- **Mulligans:** ").append(String.join(", ", mullTxt)).append('\n');
++        if (!countered.isEmpty()) {
++            final List<String> ct = new ArrayList<>();
++            for (final Map.Entry<String, List<String>> e : countered.entrySet()) {
++                ct.add(e.getKey() + ": " + String.join(", ", e.getValue()));
++            }
++            md.append("- **Spells countered or fizzled:** ").append(String.join("; ", ct)).append('\n');
++        }
++        md.append("- **Length:** ").append(ms / 1000).append(" s of computer time; seed ").append(seed).append('\n');
++        if (error != null) {
++            md.append("- **Engine error:** ").append(error).append('\n');
++        }
++        final List<String> keyPlays = keyPlays(log, journal);
++        if (!keyPlays.isEmpty()) {
++            md.append("\n### Key plays\n\n");
++            for (final String kp : keyPlays) {
++                md.append("- ").append(kp).append('\n');
++            }
++        }
++        md.append("\n## Play by play\n\n");
++        if (rec.openingText != null) {
++            md.append("### Opening hands (after mulligans)\n\n").append(rec.openingText).append('\n');
++        }
++        for (final GameLogEntry e : log) {
++            switch (e.type()) {
++                case TURN -> {
++                    md.append("\n### ").append(e.message()).append("\n\n");
++                    final Integer tn = turnNumber(e.message());
++                    if (tn != null && tn > 1 && rec.handsText.containsKey(tn)) {
++                        md.append(rec.handsText.get(tn)).append('\n');
++                    }
++                }
++                case PHASE, MANA, PLAYER_CONTROL, MULLIGAN, MATCH_RESULTS -> { }
++                default -> md.append("- ").append(e.message().replace("\n", " ")).append('\n');
++            }
++        }
++        if (!journal.isEmpty()) {
++            md.append("\n## cEDH pilot notes\n\n");
++            for (final String j : journal) {
++                md.append("- ").append(j).append('\n');
++            }
++        }
++        md.append("\n## Final board\n\n");
++        for (final Player pl : game.getRegisteredPlayers()) {
++            md.append("- **").append(pl.getName()).append("** life ").append(pl.getLife()).append(", battlefield: ")
++              .append(names(pl.getCardsIn(ZoneType.Battlefield))).append("; hand: ").append(names(pl.getCardsIn(ZoneType.Hand)))
++              .append('\n');
++        }
++        final Path file = out.resolve("games").resolve(String.format("game-%03d.md", gameNo));
++        Files.writeString(file, md.toString(), StandardCharsets.UTF_8);
++
++        // ---------- JSON line
++        final StringBuilder js = new StringBuilder("{");
++        js.append("\"game\":").append(gameNo).append(",\"seed\":").append(seed)
++          .append(",\"players\":").append(jsonList(seats))
++          .append(",\"hero\":").append(json(heroName))
++          .append(",\"styles\":").append(json(String.join(", ", seatStyles)))
++          .append(",\"round_cap\":").append(roundCap)
++          .append(",\"winner\":").append(json(winner == null ? null : winner.getName()))
++          .append(",\"how\":").append(json(how))
++          .append(",\"game_turn\":").append(turn)
++          .append(",\"winner_turns\":").append(winnerTurns)
++          .append(",\"seconds\":").append(ms / 1000)
++          .append(",\"timed_out\":").append(timedOut)
++          .append(",\"error\":").append(json(error))
++          .append(",\"key_plays\":").append(jsonList(keyPlays))
++          .append(",\"journal\":").append(jsonList(journal))
++          .append(",\"stats\":{");
++        boolean first = true;
++        for (final Player pl : game.getRegisteredPlayers()) {
++            final String s = pl.getName();
++            final List<String> endHand = new ArrayList<>();
++            for (final Card c : pl.getCardsIn(ZoneType.Hand)) {
++                endHand.add(c.getName());
++            }
++            final List<String> openHand = rec.opening == null ? List.of() : rec.opening.getOrDefault(s, List.of());
++            js.append(first ? "" : ",").append(json(s)).append(":{")
++              .append("\"seat\":").append(seats.indexOf(s) + 1)
++              .append(",\"mulligans\":").append(mulligans.get(s))
++              .append(",\"opening_hand\":").append(jsonList(openHand))
++              .append(",\"seen\":").append(jsonList(rec.seen.getOrDefault(s, new LinkedHashSet<>())))
++              .append(",\"cast\":").append(jsonList(cast.get(s)))
++              .append(",\"lands\":").append(jsonList(lands.get(s)))
++              .append(",\"countered\":").append(jsonList(countered.getOrDefault(s, List.of())))
++              .append(",\"end_hand\":").append(jsonList(endHand))
++              .append(",\"battlefield\":").append(jsonList(Arrays.asList(names(pl.getCardsIn(ZoneType.Battlefield)).split(", "))))
++              .append(",\"turns_taken\":").append(rec.turnsTaken.getOrDefault(s, 0))
++              .append(",\"life\":").append(pl.getLife())
++              .append(",\"loss\":").append(json(pl.getOutcome() == null || pl.getOutcome().lossState == null ? null
++                      : pl.getOutcome().lossState.name()))
++              .append('}');
++            first = false;
++        }
++        js.append("},\"file\":").append(json(file.toAbsolutePath().toString()))
++          .append(",\"finished\":").append(json(Instant.now().toString())).append("}\n");
++        Files.writeString(out.resolve("results.jsonl"), js.toString(), StandardCharsets.UTF_8,
++                StandardOpenOption.CREATE, StandardOpenOption.APPEND);
++
++        System.out.println("GAME " + gameNo + " | " + String.join(" / ", seats) + " | winner: "
++                + (winner == null ? "draw" : winner.getName()) + " | " + how
++                + (winner != null ? " | winner's turn " + winnerTurns : "") + " | " + (ms / 1000) + " s");
++        System.out.flush();
++    }
++
++    private static Integer turnNumber(final String msg) {
++        final Matcher m = Pattern.compile("Turn (\\d+)").matcher(msg);
++        return m.find() ? Integer.parseInt(m.group(1)) : null;
++    }
++
++    /** A short list: the pilot's combo lines, the big spells, the answers and the winning blow. */
++    static List<String> keyPlays(final List<GameLogEntry> log, final List<String> journal) {
++        final List<String> out = new ArrayList<>();
++        for (final String j : journal) {
++            if (j.contains("LINE") || j.contains("WIN")) {
++                out.add("pilot: " + j);
++            }
++        }
++        final Set<String> keyCards = new HashSet<>(Arrays.asList("Thassa's Oracle", "Demonic Consultation",
++                "Tainted Pact", "Underworld Breach", "Ad Nauseam", "Brain Freeze", "Laboratory Maniac",
++                "Jace, Wielder of Mysteries", "Doomsday", "Necropotence", "Displacer Kitten", "Dramatic Reversal",
++                "Isochron Scepter", "Food Chain", "Kinnan, Bonder Prodigy", "Basalt Monolith", "Walking Ballista",
++                "Dualcaster Mage", "Twinflame", "Heliod, Sun-Crowned", "Grindstone", "Painter's Servant",
++                "Hermit Druid", "Protean Hulk", "Flash", "Mnemonic Betrayal", "Wheel of Fortune", "Timetwister",
++                "Lion's Eye Diamond", "Bolas's Citadel", "Aetherflux Reservoir", "Demonic Tutor", "Vampiric Tutor",
++                "Imperial Seal", "Rhystic Study", "Mystic Remora", "Natural Order", "Finale of Devastation",
++                "Dockside Extortionist", "Birgi, God of Storytelling", "Tymna the Weaver", "Kraum, Ludevic's Opus"));
++        final Set<String> answers = new HashSet<>(Arrays.asList("Force of Will", "Force of Negation", "Pact of Negation",
++                "Fierce Guardianship", "Mental Misstep", "Flusterstorm", "Swan Song", "Mindbreak Trap",
++                "Red Elemental Blast", "Pyroblast", "Deflecting Swat", "Silence", "Orim's Chant", "Mana Tithe",
++                "Counterspell", "Mana Drain", "Spell Pierce", "An Offer You Can't Refuse", "Stern Scolding",
++                "Veil of Summer", "Dispel", "Snapback", "Abeyance", "Swords to Plowshares", "Path to Exile",
++                "Cyclonic Rift", "Chain of Vapor", "Strix Serenade", "Drannith Magistrate", "Opposition Agent",
++                "Collector Ouphe", "Rule of Law", "Damping Sphere", "Trinisphere", "Cursed Totem"));
++        String turn = "";
++        for (final GameLogEntry e : log) {
++            final String m = e.message();
++            if (e.type() == GameLogEntryType.TURN) {
++                turn = m.replaceAll("^Turn (\\d+).*$", "T$1");
++                continue;
++            }
++            if (e.type() == GameLogEntryType.GAME_OUTCOME && m.contains("has won")) {
++                out.add("End: " + m);
++                continue;
++            }
++            if (e.type() != GameLogEntryType.STACK_ADD) {
++                continue;
++            }
++            final Matcher mm = CAST.matcher(m);
++            if (!mm.matches()) {
++                continue;
++            }
++            final String card = mm.group(2).replaceAll(" \\(\\d+\\)$", "");
++            if (keyCards.contains(card) || answers.contains(card)) {
++                out.add(turn + ": " + m);
++            }
++        }
++        return out.size() > 30 ? out.subList(out.size() - 30, out.size()) : out;
++    }
++
++    private static Map<String, List<String>> parse(final String[] args) {
++        final Map<String, List<String>> params = new HashMap<>();
++        List<String> cur = null;
++        for (int i = 1; i < args.length; i++) {
++            final String a = args[i];
++            if (a.startsWith("-") && a.length() > 1 && !Character.isDigit(a.charAt(1))) {
++                cur = new ArrayList<>();
++                params.put(a.substring(1), cur);
++            } else if (cur != null) {
++                cur.add(a);
++            }
++        }
++        return params;
++    }
++}
+diff --git a/forge-gui-desktop/src/main/java/forge/view/Main.java b/forge-gui-desktop/src/main/java/forge/view/Main.java
+index 8f1b018d..dd3d7de6 100644
+--- a/forge-gui-desktop/src/main/java/forge/view/Main.java
++++ b/forge-gui-desktop/src/main/java/forge/view/Main.java
+@@ -104,6 +104,10 @@ public final class Main {
+                 SimulateMatch.simulate(args);
+                 break;
+ 
++            case "cedh":
++                CedhSim.run(args);
++                break;
++
+             case "parse":
+                 CardReaderExperiments.parseAllCards(args);
+                 break;
+@@ -127,7 +131,7 @@ public final class Main {
+      * not a mode and only prints usage, so it is deliberately not listed here.
+      */
+     public static boolean isCommandLineMode(final String mode) {
+-        return "sim".equals(mode) || "parse".equals(mode) || "server".equals(mode);
++        return "sim".equals(mode) || "cedh".equals(mode) || "parse".equals(mode) || "server".equals(mode);
+     }
+ 
+     @SuppressWarnings("deprecation")
+diff --git a/forge-gui/res/ai/Cedh.ai b/forge-gui/res/ai/Cedh.ai
+new file mode 100644
+index 00000000..401c8e61
+--- /dev/null
++++ b/forge-gui/res/ai/Cedh.ai
+@@ -0,0 +1,351 @@
++# The amount of cards at which to stop considering mulligan
++MULLIGAN_THRESHOLD=4
++
++# Aggro preferences (enabling these will generally make the AI attack more aggressively into potential trades)
++# If the following option is enabled, the AI will generally play aggressively, seeking trades on offense when possible
++# (the following two parameters will then be ignored)
++PLAY_AGGRO=false
++# The chance to attack aggressively into a potential trade (works even if not playing all-out aggro, e.g. PLAY_AGGRO disabled,
++# but only in more favorable conditions in that case - when ahead in life count and in parity or ahead in creature count)
++CHANCE_TO_ATTACK_INTO_TRADE=0
++# When enabled, the AI will attack into trading options when it's tapped out (note that this flag is ignored if PLAY_AGGRO
++# is globally enabled). If disabled, the non-aggro AI will only attack into trades when it has mana open, thus having a chance
++# to "bluff" (or use, if available) combat tricks at the same time.
++ATTACK_INTO_TRADE_WHEN_TAPPED_OUT=false
++# If enabled, the AI will only randomly attack into a trade if its life pressure is lower than the opponent's.
++RANDOMLY_ATKTRADE_ONLY_ON_LOWER_LIFE_PRESSURE=true
++# When above zero, the AI will attack into trading options when the opponent is not tapped out, thus risking getting an
++# unexpected combat trick or ability activation. Note that this chance is rolled separately after CHANCE_TO_ATTACK_INTO_TRADE
++# has already succeeded.
++CHANCE_TO_ATKTRADE_WHEN_OPP_HAS_MANA=30
++# When enabled, the AI will run some additional checks in an attempt to avoid attacking into certain block situations
++# when it can't deal at least some permanent damage to the defending creature/planeswalker or to at least one defending
++# creature. Works in many but not all cases.
++TRY_TO_AVOID_ATTACKING_INTO_CERTAIN_BLOCK=true
++# When enabled, the AI will use Berserk on offense to try to severely damage the opponent at the expense of the creature
++USE_BERSERK_AGGRESSIVELY=true
++# Try to hold combat tricks until blockers are declared in an attempt to trick the opponent into blocking a weak creature
++# and dying to it (currently has some limitations, the AI will only try to do it to one creature per turn)
++TRY_TO_HOLD_COMBAT_TRICKS_UNTIL_BLOCK=true
++# Chance to hold combat tricks until blockers are declared. If -1 is specified, this chance is not used, and the standard
++# evaluation for offensive pump buff is used instead.
++CHANCE_TO_HOLD_COMBAT_TRICKS_UNTIL_BLOCK=65
++
++# Trade blocking preferences (enabling these will make the AI trade more aggressively when considering blocks,
++# but only with creatures that are worse in abilities and have lower or the same power as the attacker). Note
++# that the first option serves as a master toggle. If it is disabled, the following related options have no effect.
++ENABLE_RANDOM_FAVORABLE_TRADES_ON_BLOCK=true
++# If enabled, the AI will consider trade blocking even if its creature count is lower than the opponent's
++RANDOMLY_TRADE_EVEN_WHEN_HAVE_LESS_CREATS=false
++# If the previous option is enabled, then the next option controls how big of a handicap in creature count the AI
++# is allowed to have to still decide to trade
++MAX_DIFF_IN_CREATURE_COUNT_TO_TRADE=1
++# If enabled, the AI will also consider trading if it has a replacement creature in hand
++ALSO_TRADE_WHEN_HAVE_A_REPLACEMENT_CREAT=true
++# The allowed handicap in creature count when the AI wants to trade while having a replacement creature in hand
++MAX_DIFF_IN_CREATURE_COUNT_TO_TRADE_WITH_REPL=1
++# Min and max chance to randomly aggressively trade when blocking (note that it will become 100 if the AI is in danger)
++MIN_CHANCE_TO_RANDOMLY_TRADE_ON_BLOCK=30
++MAX_CHANCE_TO_RANDOMLY_TRADE_ON_BLOCK=70
++# The decrease amount for the trade chance when trading against a non-token Embalm/Eternalize creature with a non-token
++# creature that does not have Embalm/Eternalize
++CHANCE_DECREASE_TO_TRADE_VS_EMBALM=30
++
++# Options to save / preserve loyalty of planeswalkers
++# Chance to trade a (worse or roughly equal) creature in order to save a planeswalker or preserve its loyalty
++# (random favorable trades must be enabled)
++CHANCE_TO_TRADE_TO_SAVE_PLANESWALKER=70
++# Chance to trade a better creature for a worse one in order to save a planeswalker
++CHANCE_TO_TRADE_DOWN_TO_SAVE_PLANESWALKER=0
++# Creature evaluation threshold for which creatures to consider good candidates for chump blocking to protect a
++# planeswalker (135 is about the level of a 1/2 nontoken creature with no abilities or a 2/2 token with no abilities)
++# There is a separate option for evaluating token and nontoken creatures. Set both to -1 to disable chump blocking
++# to protect planeswalkers.
++THRESHOLD_NONTOKEN_CHUMP_TO_SAVE_PLANESWALKER=120
++THRESHOLD_TOKEN_CHUMP_TO_SAVE_PLANESWALKER=135
++# If enabled, the AI will not bother chump blocking to protect a planeswalker unless lethal damage is threatened to it
++CHUMP_TO_SAVE_PLANESWALKER_ONLY_ON_LETHAL=true
++
++# Options that allow the AI to attempt to optimize targeting for removal and damaging spells.
++# If enabled, the AI will try not to target a creature with a damaging spell or spot removal in case
++# this creature will die in current combat or to a spell which is currently on stack targeting it.
++AVOID_TARGETING_CREATS_THAT_WILL_DIE=true
++# If enabled, the AI will not evaluate the stack in case at least one counterspell is present on it,
++# since the current AI is not smart enough to predict whether a kill spell on stack is countered or not.
++DONT_EVAL_KILLSPELLS_ON_STACK_WITH_PERMISSION=true
++
++# If AI would drop to this amount of life in combat, it'll try to defend itself more actively
++AI_IN_DANGER_THRESHOLD=6
++# If set to the same value, AI will be predictable. If set to higher, AI will randomly pick a value between the two
++# for each evaluation, introducing some unpredictability.
++AI_IN_DANGER_MAX_THRESHOLD=6
++
++# Only works when AI cheating is enabled in preferences, otherwise does nothing
++CHEAT_WITH_MANA_ON_SHUFFLE=false
++
++# The chance for the AI to attempt to hold land drops until Main 2 when it's safe and when it has nothing to potentially
++# do with the extra mana
++HOLD_LAND_DROP_FOR_MAIN2_IF_UNUSED=100
++# If enabled, the AI will not try to conceal its land drops until Main 2 if the only permanents it has in play are lands
++# (usually in this case this accomplishes little but confuses the game a bit; disable for a little bit more unpredictability)
++HOLD_LAND_DROP_ONLY_IF_HAVE_OTHER_PERMS=true
++
++# Planechase logic
++DEFAULT_MAX_PLANAR_DIE_ROLLS_PER_TURN=1
++DEFAULT_MIN_TURN_TO_ROLL_PLANAR_DIE=3
++DEFAULT_PLANAR_DIE_ROLL_CHANCE=50
++PLANAR_DIE_ROLL_HESITATION_CHANCE=10
++
++# Timings for moving equipment to other targets
++MOVE_EQUIPMENT_TO_BETTER_CREATURES=from_useless_only
++MOVE_EQUIPMENT_CREATURE_EVAL_THRESHOLD=60
++PRIORITIZE_MOVE_EQUIPMENT_IF_USELESS=true
++# If there's a sacrifice cost to reattach an aura/equipment to another target creature, how big of an evaluation difference
++# should there be between the old target and the new one for the AI to decide to proceed with it.
++SAC_TO_REATTACH_TARGET_EVAL_THRESHOLD=400
++
++# Currently disabled
++PREDICT_SPELLS_FOR_MAIN2=true
++RESERVE_MANA_FOR_MAIN2_CHANCE=100
++
++# If enabled, the AI will protect its permanents against curse auras with Hexproof, Shroud, and Protection
++ACTIVELY_PROTECT_VS_CURSE_AURAS=true
++
++# If enabled, the AI will target artifacts and non-aura enchantments with removal aggressively
++ACTIVELY_DESTROY_ARTS_AND_NONAURA_ENCHS=true
++
++# If enabled, the AI will prioritize removing creatures that it can't block at all (e.g. Flying in absence of flying
++# blockers). This is a master toggle. If disabled, the following three options do nothing.
++ACTIVELY_DESTROY_IMMEDIATELY_UNBLOCKABLE=true
++# How many unblockable creatures can there be when the AI should still consider prioritizing something (when there are
++# too many, probably it's just worth going for the biggest threat overall instead)
++DESTROY_IMMEDIATELY_UNBLOCKABLE_THRESHOLD=2
++# Only consider prioritizing the destruction of immediately unblockable creatures if life is in danger
++DESTROY_IMMEDIATELY_UNBLOCKABLE_ONLY_IN_DNGR=true
++# How much life can there remain after a swing of the immediately unblockable creature for it to be considered dangerous
++# for the purpose of previous option
++DESTROY_IMMEDIATELY_UNBLOCKABLE_LIFE_IN_DNGR=5
++
++# The chance that the AI will try to chain two damage spells or a damage spell and a debuffing pump spell to try to
++# kill a bigger creature or a planeswalker. If set to 0, will be disabled. When enabled, will automatically become 100
++# if the AI is in danger of dying.
++CHANCE_TO_CHAIN_TWO_DAMAGE_SPELLS=90
++
++# The chance that the AI will try to hold on to a direct damage spell with X in its cost (e.g. Blaze, Fireball, etc.)
++# so that it doesn't cast it too early in the game against an early game target. Note that when in danger or when the
++# AI has a chance to finish the opponent off with such a spell, it will not hold back the spells.
++HOLD_X_DAMAGE_SPELLS_FOR_MORE_DAMAGE_CHANCE=100
++# This threshold defines the minimum amount of damage *or* the minimum number of the AI's turn in order to play a
++# direct damage spell with X without holding it back. For example, if set to 5, the AI will prefer to hold the spell
++# back (unless lethal/in danger) unless it can deal 5 or more damage with it or unless it's the AI's 5th turn or later.
++HOLD_X_DAMAGE_SPELLS_THRESHOLD=5
++
++# Permission timings
++MIN_SPELL_CMC_TO_COUNTER=0
++CHANCE_TO_COUNTER_CMC_1=100
++CHANCE_TO_COUNTER_CMC_2=100
++CHANCE_TO_COUNTER_CMC_3=100
++ALWAYS_COUNTER_OTHER_COUNTERSPELLS=true
++ALWAYS_COUNTER_DAMAGE_SPELLS=true
++ALWAYS_COUNTER_CMC_0_MANA_MAKING_PERMS=true
++ALWAYS_COUNTER_REMOVAL_SPELLS=true
++ALWAYS_COUNTER_PUMP_SPELLS=true
++ALWAYS_COUNTER_AURAS=true
++ALWAYS_COUNTER_SPELLS_FROM_NAMED_CARDS=None
++
++# Copy spell on stack logic
++# The chance that the AI will copy its own stack right after placing it there while it has priority
++CHANCE_TO_COPY_OWN_SPELL_WHILE_ON_STACK=30
++# If the copied spell costs this much more than the copy spell, the chance to copy the spell will become 100
++ALWAYS_COPY_SPELL_IF_CMC_DIFF=2
++
++# Storm spell logic
++PRIORITY_REDUCTION_FOR_STORM_SPELLS=9
++MIN_COUNT_FOR_STORM_SPELLS=1
++
++# Logic for Strip Mine, Wasteland, and other similar sac-destroy land cards.
++# Ghost Quarter uses AILogic$ GhostQuarter for its replacement-land caution.
++STRIPMINE_MIN_LANDS_IN_HAND_TO_ACTIVATE=1
++STRIPMINE_MIN_LANDS_FOR_NO_TIMING_CHECK=9999
++STRIPMINE_MIN_LANDS_OTB_FOR_NO_TEMPO_CHECK=6
++STRIPMINE_MAX_LANDS_TO_ATTEMPT_MANALOCKING=3
++STRIPMINE_HIGH_PRIORITY_ON_SKIPPED_LANDDROP=true
++
++# The default chance to use the token-generation abilities
++TOKEN_GENERATION_ABILITY_CHANCE=80
++# Situations where the AI should always use the token-generation abilities if possible
++TOKEN_GENERATION_ALWAYS_IF_FROM_PLANESWALKER=true
++TOKEN_GENERATION_ALWAYS_IF_OPP_ATTACKS=true
++
++# Flash AI toggles
++# Master toggle: if enabled, a more advanced Flash consideration logic will be enabled (probably slower),
++# which will also enable all the following toggles.
++FLASH_ENABLE_ADVANCED_LOGIC=true
++# The chance the AI will obey SVar AmbushAI to try to surprise the opponent after the attack is declared
++# (e.g. Hixus, Prison Warden)
++FLASH_CHANCE_TO_OBEY_AMBUSHAI=100
++# The chance the AI will cast the Flash creature at instant speed purely for the fact that it has a ETB effect.
++FLASH_CHANCE_TO_CAST_DUE_TO_ETB_EFFECTS=100
++# The chance the AI may cast the Flash creature with ETB effects even earlier than its own Main 1 to try to benefit
++# from the ETB effect (most likely suboptimal and many mana lock the AI, so keep this at a lower chance normally).
++FLASH_CHANCE_TO_CAST_FOR_ETB_BEFORE_MAIN1=10
++# The chance the AI may cast the Flash creature with ETB effects in response to an opposing spell on stack.
++# Quite basic right now, and may do stupid things more often than not, so better left disabled until improved
++# (or at a low chance).
++FLASH_CHANCE_TO_RESPOND_TO_STACK_WITH_ETB=0
++# The chance the AI will attempt to add a new blocker in combat where it's low on creature count compared to the
++# number of attacking creatures.
++FLASH_CHANCE_TO_CAST_AS_VALUABLE_BLOCKER=100
++# If enabled, the AI will try to hold off playing auras with Flash until the declare blockers step in combat.
++# If disabled, but advanced logic is enabled, will generally try to play these auras before its own turn.
++FLASH_USE_BUFF_AURAS_AS_COMBAT_TRICKS=true
++# The chance that the AI will cast a flash aura enchantment at the earliest opportunity
++FLASH_BUFF_AURA_CHANCE_TO_CAST_EARLY=1
++# The chance that the AI will cast a flash aura at the end of turn before its own turn
++FLASH_BUFF_AURA_CHANCE_CAST_AT_EOT=5
++# The chance that the AI will respond to stack with a flash aura which makes sense in context
++FLASH_BUFF_AURA_CHANCE_TO_RESPOND_TO_STACK=100
++
++# Scry AI toggles
++# The total number of mana-producing lands at which the AI will still consider scrying away non-lands
++SCRY_NUM_LANDS_TO_STILL_NEED_MORE=4
++# The total number of mana-producing lands at which the AI will stop considering scrying such lands to top
++SCRY_NUM_LANDS_TO_NOT_NEED_MORE=7
++# The total number of creatures when the AI will consider scrying away the ones that are below average in
++# evaluation score for the deck
++SCRY_NUM_CREATURES_TO_NOT_NEED_SUBPAR_ONES=4
++# The total number of creatures on board at which to start considering scrying away low CMC creatures
++# as defined in the two following options
++SCRY_EVALTHR_CREATCOUNT_TO_SCRY_AWAY_LOWCMC=3
++# The evaluation score at which the AI will consider the creature bad enough to scry it away in case it's
++# low CMC (see the next option) and the AI already has higher CMC creatures on board
++SCRY_EVALTHR_TO_SCRY_AWAY_LOWCMC_CREATURE=160
++# The CMC threshold at which (and below which) the AI considers creatures to be "low CMC" for the purpose
++# of the previous option
++SCRY_EVALTHR_CMC_THRESHOLD=3
++# If enabled, the AI will scry cards that it can't immediately cast to the bottom
++SCRY_IMMEDIATELY_UNCASTABLE_TO_BOTTOM=true
++# How big of a CMC difference between the currently castable and the considered card's CMC is allowed before
++# the card is considered not immediately castable for the purpose of the previous option
++SCRY_IMMEDIATELY_UNCASTABLE_CMC_DIFF=1
++# Surveil AI toggles (currently the AI uses Scry logic for the majority of decisions)
++# If the AI has this many or fewer cards in the library, it will Surveil to the top of the library in order
++# not to deplete the library.
++SURVEIL_NUM_CARDS_IN_LIBRARY_TO_BAIL=10
++# If the AI will have less life than the specified percentage as a result of activating a Surveil ability
++# that requires a life playment, it will not pay life to activate it (e.g. Doom Whisperer).
++SURVEIL_LIFEPERC_AFTER_PAYING_LIFE=60
++
++# Attempt to predict the number of potential blockers with various forms of evasion when
++# deciding to do an all-in assault attack
++COMBAT_ASSAULT_ATTACK_EVASION_PREDICTION=true
++# Attempt to predict the number of potential blockers with various forms of evasion when
++# deciding to do an attrition race attack
++COMBAT_ATTRITION_ATTACK_EVASION_PREDICTION=true
++
++# AILogic$ PayEnergyConservatively (used for Britsling Hydra and Longtusk Cub) will only
++# be used in case the creature is engaged in favorable combat
++CONSERVATIVE_ENERGY_PAYMENT_ONLY_IN_COMBAT=true
++# If true, the conservative energy payment will not be used when the creature is attacking,
++# only when it's blocking (for more controlling AIs)
++CONSERVATIVE_ENERGY_PAYMENT_ONLY_DEFENSIVELY=false
++
++# How big of a value difference there should be for the AI to consider mass bouncing all creature permanents
++# on both sides of the battlefield in a non-lethal situation
++BOUNCE_ALL_TO_HAND_CREAT_EVAL_DIFF=200
++BOUNCE_ALL_ELSEWHERE_CREAT_EVAL_DIFF=200
++# How big of a CMC difference there should be for the AI to consider mass bouncing all noncreature permanents
++# on both side of the battlefield
++BOUNCE_ALL_TO_HAND_NONCREAT_EVAL_DIFF=3
++BOUNCE_ALL_ELSEWHERE_NONCREAT_EVAL_DIFF=3
++
++# Use a blink spell to reload a planeswalker's loyalty (e.g. Teferi's Time Twist)
++# A chance (per check) to activate this ability
++BLINK_RELOAD_PLANESWALKER_CHANCE=30
++# Maximum loyalty at which the planeswalker needs to be in order to activate the blink-reload
++BLINK_RELOAD_PLANESWALKER_MAX_LOYALTY=2
++# The difference between maximum loyalty and base loyalty of the planeswalker in order to consider blink-reloading it
++BLINK_RELOAD_PLANESWALKER_LOYALTY_DIFF=2
++
++# If enabled, the AI will try to pair up cards to present to the opponent so that a specific card may be picked,
++# it'll also try to grab Accumulated Knowledge and Take Inventory more actively, as well as interact with the Trix
++# combo deck more appropriately. In Reanimator decks, this logic will make the AI pick the fattest threats in the
++# library to put some into the graveyard.
++INTUITION_ALTERNATIVE_LOGIC=true
++
++# If enabled, the AI will run some additional checks in order to try to preserve spells that have Buyback and not
++# use them unless absolutely necessary (or unless multiple copies are in hand).
++TRY_TO_PRESERVE_BUYBACK_SPELLS=true
++
++# How big of a difference is allowed between the revealed card CMC and the currently castable CMC to still put the
++# card on top of the library
++EXPLORE_MAX_CMC_DIFF_TO_PUT_IN_GRAVEYARD=2
++# The number of lands on the battlefield when the AI would use Explore to put non-land cards in graveyard if it
++# doesn't have a land in hand
++EXPLORE_NUM_LANDS_TO_STILL_NEED_MORE=2
++
++# Momir/MoJhoSto casual variant properties
++# Which lands the AI would prefer to play in Momir Basic and MoJhoSto modes. When set to "default", generally plays
++# lands in WUBRG order. When set to "random", will play a completely random basic land from hand. When set to
++# "preforder:XXX", where "XXX" is a list of color specifications, will play basic lands in this preferred order,
++# and if no preferred land can be found, will play a random one (e.g. "preforder:RB" plays Mountains first, Swamps
++# second, and then everything else randomly if no Mountains or Swamps are present).
++MOMIR_BASIC_LAND_STRATEGY=default
++# MoJhoSto only casual variant properties
++# How many lands the AI needs to have on the battlefield to begin considering activating Jhoira in MoJhoSto
++MOJHOSTO_NUM_LANDS_TO_ACTIVATE_JHOIRA=4
++# The chance that the AI will activate Jhoira instead of activating Momir
++MOJHOSTO_CHANCE_TO_PREFER_JHOIRA_OVER_MOMIR=50
++# The chance that the AI will activate Jhoira's copy random instant ability (per phase, the AI will generally
++# attempt this either in its upkeep or its draw phase or main 1).
++MOJHOSTO_CHANCE_TO_USE_JHOIRA_COPY_INSTANT=20
++
++# Master toggle for the following options setting the default AIPreference:SacCost handling.
++SACRIFICE_DEFAULT_PREF_ENABLE=false
++# If a card has no card-specific AIPreference for the Sacrifice cost (AIPreference:SacCost), the AI will still
++# consider the sacrifice of a matching card if its mana value (CMC) matches the specified minimum
++SACRIFICE_DEFAULT_PREF_MIN_CMC=0
++# If a card has no card-specific AIPreference for the Sacrifice cost (AIPreference:SacCost), the AI will still
++# consider the sacrifice of a matching card if its mana value (CMC) matches the specified maximum
++SACRIFICE_DEFAULT_PREF_MAX_CMC=2
++# If a card has no card-specific AIPreference for the Sacrifice cost (AIPreference:SacCost), the AI will still
++# consider the sacrifice of a matching card is a token
++SACRIFICE_DEFAULT_PREF_ALLOW_TOKENS=true
++# A creature should evaluate to no more than this much to be considered for default SacCost preference
++SACRIFICE_DEFAULT_PREF_MAX_CREATURE_EVAL=135
++
++# Enable sideboarding in limited formats (e.g. Sealed, Draft)
++SIDEBOARDING_IN_LIMITED_FORMATS=false
++# Chance to proceed with sideboarding any given pair of cards in the devised sideboarding plan
++SIDEBOARDING_CHANCE_PER_CARD=50
++# Chance to do some sideboarding after winning a game
++SIDEBOARDING_CHANCE_ON_WIN=0
++# Only allow replacing a card with another card that shares the same core types. If disabled, mixing types will be
++# allowed, although a creature is still only replaced with another creature (or planeswalker, see the next option)
++SIDEBOARDING_SHARED_TYPE_ONLY=false
++# Allow replacing a creature with a planeswalker and vice versa when sideboarding if the previous option is disabled
++SIDEBOARDING_PLANESWALKER_EQ_CREATURE=false
++
++# Flat Monte Carlo: maximum search for strong desktops; slow on phones. No hidden information is used.
++FLAT_MC_MAX_CANDIDATES=4
++FLAT_MC_ROLLOUTS_PER_CANDIDATE=2
++FLAT_MC_MAX_PLAYOUT_PLAYS=6
++FLAT_MC_COMBO_PLAYOUT_PLAYS=16
++FLAT_MC_DECISION_BUDGET_MS=300
++FLAT_MC_TURN_BUDGET_MS=1500
++FLAT_MC_HEURISTIC_BONUS=60
++FLAT_MC_CONSIDER_HOLDING=true
++FLAT_MC_HOLD_MANA_WEIGHT=120
++FLAT_MC_RISK_WEIGHT=140
++FLAT_MC_OVERRIDE_MAJORITY=50
++FLAT_MC_EXTRA_ROUNDS=1
++FLAT_MC_PRUNING=true
++FLAT_MC_CATEGORY_HOLD=true
++FLAT_MC_ADAPTIVE_PLAYOUT=true
++FLAT_MC_TARGET_VARIANTS=2
++FLAT_MC_ENABLED=true
++FLAT_MC_STRATEGIC_WEIGHT=100
++FLAT_MC_DISCOVERY=true
++FLAT_MC_EXTRA_CANDIDATES=1
++FLAT_MC_LAND_CHOICE=true
++FLAT_MC_REACTIVE=true
+diff --git a/forge-gui/res/ai/CedhAggro.ai b/forge-gui/res/ai/CedhAggro.ai
+new file mode 100644
+index 00000000..8709342a
+--- /dev/null
++++ b/forge-gui/res/ai/CedhAggro.ai
+@@ -0,0 +1,351 @@
++# The amount of cards at which to stop considering mulligan
++MULLIGAN_THRESHOLD=4
++
++# Aggro preferences (enabling these will generally make the AI attack more aggressively into potential trades)
++# If the following option is enabled, the AI will generally play aggressively, seeking trades on offense when possible
++# (the following two parameters will then be ignored)
++PLAY_AGGRO=true
++# The chance to attack aggressively into a potential trade (works even if not playing all-out aggro, e.g. PLAY_AGGRO disabled,
++# but only in more favorable conditions in that case - when ahead in life count and in parity or ahead in creature count)
++CHANCE_TO_ATTACK_INTO_TRADE=0
++# When enabled, the AI will attack into trading options when it's tapped out (note that this flag is ignored if PLAY_AGGRO
++# is globally enabled). If disabled, the non-aggro AI will only attack into trades when it has mana open, thus having a chance
++# to "bluff" (or use, if available) combat tricks at the same time.
++ATTACK_INTO_TRADE_WHEN_TAPPED_OUT=false
++# If enabled, the AI will only randomly attack into a trade if its life pressure is lower than the opponent's.
++RANDOMLY_ATKTRADE_ONLY_ON_LOWER_LIFE_PRESSURE=true
++# When above zero, the AI will attack into trading options when the opponent is not tapped out, thus risking getting an
++# unexpected combat trick or ability activation. Note that this chance is rolled separately after CHANCE_TO_ATTACK_INTO_TRADE
++# has already succeeded.
++CHANCE_TO_ATKTRADE_WHEN_OPP_HAS_MANA=30
++# When enabled, the AI will run some additional checks in an attempt to avoid attacking into certain block situations
++# when it can't deal at least some permanent damage to the defending creature/planeswalker or to at least one defending
++# creature. Works in many but not all cases.
++TRY_TO_AVOID_ATTACKING_INTO_CERTAIN_BLOCK=true
++# When enabled, the AI will use Berserk on offense to try to severely damage the opponent at the expense of the creature
++USE_BERSERK_AGGRESSIVELY=true
++# Try to hold combat tricks until blockers are declared in an attempt to trick the opponent into blocking a weak creature
++# and dying to it (currently has some limitations, the AI will only try to do it to one creature per turn)
++TRY_TO_HOLD_COMBAT_TRICKS_UNTIL_BLOCK=true
++# Chance to hold combat tricks until blockers are declared. If -1 is specified, this chance is not used, and the standard
++# evaluation for offensive pump buff is used instead.
++CHANCE_TO_HOLD_COMBAT_TRICKS_UNTIL_BLOCK=65
++
++# Trade blocking preferences (enabling these will make the AI trade more aggressively when considering blocks,
++# but only with creatures that are worse in abilities and have lower or the same power as the attacker). Note
++# that the first option serves as a master toggle. If it is disabled, the following related options have no effect.
++ENABLE_RANDOM_FAVORABLE_TRADES_ON_BLOCK=true
++# If enabled, the AI will consider trade blocking even if its creature count is lower than the opponent's
++RANDOMLY_TRADE_EVEN_WHEN_HAVE_LESS_CREATS=false
++# If the previous option is enabled, then the next option controls how big of a handicap in creature count the AI
++# is allowed to have to still decide to trade
++MAX_DIFF_IN_CREATURE_COUNT_TO_TRADE=1
++# If enabled, the AI will also consider trading if it has a replacement creature in hand
++ALSO_TRADE_WHEN_HAVE_A_REPLACEMENT_CREAT=true
++# The allowed handicap in creature count when the AI wants to trade while having a replacement creature in hand
++MAX_DIFF_IN_CREATURE_COUNT_TO_TRADE_WITH_REPL=1
++# Min and max chance to randomly aggressively trade when blocking (note that it will become 100 if the AI is in danger)
++MIN_CHANCE_TO_RANDOMLY_TRADE_ON_BLOCK=30
++MAX_CHANCE_TO_RANDOMLY_TRADE_ON_BLOCK=70
++# The decrease amount for the trade chance when trading against a non-token Embalm/Eternalize creature with a non-token
++# creature that does not have Embalm/Eternalize
++CHANCE_DECREASE_TO_TRADE_VS_EMBALM=30
++
++# Options to save / preserve loyalty of planeswalkers
++# Chance to trade a (worse or roughly equal) creature in order to save a planeswalker or preserve its loyalty
++# (random favorable trades must be enabled)
++CHANCE_TO_TRADE_TO_SAVE_PLANESWALKER=70
++# Chance to trade a better creature for a worse one in order to save a planeswalker
++CHANCE_TO_TRADE_DOWN_TO_SAVE_PLANESWALKER=0
++# Creature evaluation threshold for which creatures to consider good candidates for chump blocking to protect a
++# planeswalker (135 is about the level of a 1/2 nontoken creature with no abilities or a 2/2 token with no abilities)
++# There is a separate option for evaluating token and nontoken creatures. Set both to -1 to disable chump blocking
++# to protect planeswalkers.
++THRESHOLD_NONTOKEN_CHUMP_TO_SAVE_PLANESWALKER=120
++THRESHOLD_TOKEN_CHUMP_TO_SAVE_PLANESWALKER=135
++# If enabled, the AI will not bother chump blocking to protect a planeswalker unless lethal damage is threatened to it
++CHUMP_TO_SAVE_PLANESWALKER_ONLY_ON_LETHAL=true
++
++# Options that allow the AI to attempt to optimize targeting for removal and damaging spells.
++# If enabled, the AI will try not to target a creature with a damaging spell or spot removal in case
++# this creature will die in current combat or to a spell which is currently on stack targeting it.
++AVOID_TARGETING_CREATS_THAT_WILL_DIE=true
++# If enabled, the AI will not evaluate the stack in case at least one counterspell is present on it,
++# since the current AI is not smart enough to predict whether a kill spell on stack is countered or not.
++DONT_EVAL_KILLSPELLS_ON_STACK_WITH_PERMISSION=true
++
++# If AI would drop to this amount of life in combat, it'll try to defend itself more actively
++AI_IN_DANGER_THRESHOLD=6
++# If set to the same value, AI will be predictable. If set to higher, AI will randomly pick a value between the two
++# for each evaluation, introducing some unpredictability.
++AI_IN_DANGER_MAX_THRESHOLD=6
++
++# Only works when AI cheating is enabled in preferences, otherwise does nothing
++CHEAT_WITH_MANA_ON_SHUFFLE=false
++
++# The chance for the AI to attempt to hold land drops until Main 2 when it's safe and when it has nothing to potentially
++# do with the extra mana
++HOLD_LAND_DROP_FOR_MAIN2_IF_UNUSED=100
++# If enabled, the AI will not try to conceal its land drops until Main 2 if the only permanents it has in play are lands
++# (usually in this case this accomplishes little but confuses the game a bit; disable for a little bit more unpredictability)
++HOLD_LAND_DROP_ONLY_IF_HAVE_OTHER_PERMS=true
++
++# Planechase logic
++DEFAULT_MAX_PLANAR_DIE_ROLLS_PER_TURN=1
++DEFAULT_MIN_TURN_TO_ROLL_PLANAR_DIE=3
++DEFAULT_PLANAR_DIE_ROLL_CHANCE=50
++PLANAR_DIE_ROLL_HESITATION_CHANCE=10
++
++# Timings for moving equipment to other targets
++MOVE_EQUIPMENT_TO_BETTER_CREATURES=from_useless_only
++MOVE_EQUIPMENT_CREATURE_EVAL_THRESHOLD=60
++PRIORITIZE_MOVE_EQUIPMENT_IF_USELESS=true
++# If there's a sacrifice cost to reattach an aura/equipment to another target creature, how big of an evaluation difference
++# should there be between the old target and the new one for the AI to decide to proceed with it.
++SAC_TO_REATTACH_TARGET_EVAL_THRESHOLD=400
++
++# Currently disabled
++PREDICT_SPELLS_FOR_MAIN2=true
++RESERVE_MANA_FOR_MAIN2_CHANCE=50
++
++# If enabled, the AI will protect its permanents against curse auras with Hexproof, Shroud, and Protection
++ACTIVELY_PROTECT_VS_CURSE_AURAS=true
++
++# If enabled, the AI will target artifacts and non-aura enchantments with removal aggressively
++ACTIVELY_DESTROY_ARTS_AND_NONAURA_ENCHS=true
++
++# If enabled, the AI will prioritize removing creatures that it can't block at all (e.g. Flying in absence of flying
++# blockers). This is a master toggle. If disabled, the following three options do nothing.
++ACTIVELY_DESTROY_IMMEDIATELY_UNBLOCKABLE=true
++# How many unblockable creatures can there be when the AI should still consider prioritizing something (when there are
++# too many, probably it's just worth going for the biggest threat overall instead)
++DESTROY_IMMEDIATELY_UNBLOCKABLE_THRESHOLD=2
++# Only consider prioritizing the destruction of immediately unblockable creatures if life is in danger
++DESTROY_IMMEDIATELY_UNBLOCKABLE_ONLY_IN_DNGR=true
++# How much life can there remain after a swing of the immediately unblockable creature for it to be considered dangerous
++# for the purpose of previous option
++DESTROY_IMMEDIATELY_UNBLOCKABLE_LIFE_IN_DNGR=5
++
++# The chance that the AI will try to chain two damage spells or a damage spell and a debuffing pump spell to try to
++# kill a bigger creature or a planeswalker. If set to 0, will be disabled. When enabled, will automatically become 100
++# if the AI is in danger of dying.
++CHANCE_TO_CHAIN_TWO_DAMAGE_SPELLS=90
++
++# The chance that the AI will try to hold on to a direct damage spell with X in its cost (e.g. Blaze, Fireball, etc.)
++# so that it doesn't cast it too early in the game against an early game target. Note that when in danger or when the
++# AI has a chance to finish the opponent off with such a spell, it will not hold back the spells.
++HOLD_X_DAMAGE_SPELLS_FOR_MORE_DAMAGE_CHANCE=100
++# This threshold defines the minimum amount of damage *or* the minimum number of the AI's turn in order to play a
++# direct damage spell with X without holding it back. For example, if set to 5, the AI will prefer to hold the spell
++# back (unless lethal/in danger) unless it can deal 5 or more damage with it or unless it's the AI's 5th turn or later.
++HOLD_X_DAMAGE_SPELLS_THRESHOLD=5
++
++# Permission timings
++MIN_SPELL_CMC_TO_COUNTER=0
++CHANCE_TO_COUNTER_CMC_1=100
++CHANCE_TO_COUNTER_CMC_2=100
++CHANCE_TO_COUNTER_CMC_3=100
++ALWAYS_COUNTER_OTHER_COUNTERSPELLS=true
++ALWAYS_COUNTER_DAMAGE_SPELLS=true
++ALWAYS_COUNTER_CMC_0_MANA_MAKING_PERMS=true
++ALWAYS_COUNTER_REMOVAL_SPELLS=true
++ALWAYS_COUNTER_PUMP_SPELLS=true
++ALWAYS_COUNTER_AURAS=true
++ALWAYS_COUNTER_SPELLS_FROM_NAMED_CARDS=None
++
++# Copy spell on stack logic
++# The chance that the AI will copy its own stack right after placing it there while it has priority
++CHANCE_TO_COPY_OWN_SPELL_WHILE_ON_STACK=30
++# If the copied spell costs this much more than the copy spell, the chance to copy the spell will become 100
++ALWAYS_COPY_SPELL_IF_CMC_DIFF=2
++
++# Storm spell logic
++PRIORITY_REDUCTION_FOR_STORM_SPELLS=9
++MIN_COUNT_FOR_STORM_SPELLS=1
++
++# Logic for Strip Mine, Wasteland, and other similar sac-destroy land cards.
++# Ghost Quarter uses AILogic$ GhostQuarter for its replacement-land caution.
++STRIPMINE_MIN_LANDS_IN_HAND_TO_ACTIVATE=1
++STRIPMINE_MIN_LANDS_FOR_NO_TIMING_CHECK=9999
++STRIPMINE_MIN_LANDS_OTB_FOR_NO_TEMPO_CHECK=6
++STRIPMINE_MAX_LANDS_TO_ATTEMPT_MANALOCKING=3
++STRIPMINE_HIGH_PRIORITY_ON_SKIPPED_LANDDROP=true
++
++# The default chance to use the token-generation abilities
++TOKEN_GENERATION_ABILITY_CHANCE=80
++# Situations where the AI should always use the token-generation abilities if possible
++TOKEN_GENERATION_ALWAYS_IF_FROM_PLANESWALKER=true
++TOKEN_GENERATION_ALWAYS_IF_OPP_ATTACKS=true
++
++# Flash AI toggles
++# Master toggle: if enabled, a more advanced Flash consideration logic will be enabled (probably slower),
++# which will also enable all the following toggles.
++FLASH_ENABLE_ADVANCED_LOGIC=true
++# The chance the AI will obey SVar AmbushAI to try to surprise the opponent after the attack is declared
++# (e.g. Hixus, Prison Warden)
++FLASH_CHANCE_TO_OBEY_AMBUSHAI=100
++# The chance the AI will cast the Flash creature at instant speed purely for the fact that it has a ETB effect.
++FLASH_CHANCE_TO_CAST_DUE_TO_ETB_EFFECTS=100
++# The chance the AI may cast the Flash creature with ETB effects even earlier than its own Main 1 to try to benefit
++# from the ETB effect (most likely suboptimal and many mana lock the AI, so keep this at a lower chance normally).
++FLASH_CHANCE_TO_CAST_FOR_ETB_BEFORE_MAIN1=10
++# The chance the AI may cast the Flash creature with ETB effects in response to an opposing spell on stack.
++# Quite basic right now, and may do stupid things more often than not, so better left disabled until improved
++# (or at a low chance).
++FLASH_CHANCE_TO_RESPOND_TO_STACK_WITH_ETB=0
++# The chance the AI will attempt to add a new blocker in combat where it's low on creature count compared to the
++# number of attacking creatures.
++FLASH_CHANCE_TO_CAST_AS_VALUABLE_BLOCKER=100
++# If enabled, the AI will try to hold off playing auras with Flash until the declare blockers step in combat.
++# If disabled, but advanced logic is enabled, will generally try to play these auras before its own turn.
++FLASH_USE_BUFF_AURAS_AS_COMBAT_TRICKS=true
++# The chance that the AI will cast a flash aura enchantment at the earliest opportunity
++FLASH_BUFF_AURA_CHANCE_TO_CAST_EARLY=1
++# The chance that the AI will cast a flash aura at the end of turn before its own turn
++FLASH_BUFF_AURA_CHANCE_CAST_AT_EOT=5
++# The chance that the AI will respond to stack with a flash aura which makes sense in context
++FLASH_BUFF_AURA_CHANCE_TO_RESPOND_TO_STACK=100
++
++# Scry AI toggles
++# The total number of mana-producing lands at which the AI will still consider scrying away non-lands
++SCRY_NUM_LANDS_TO_STILL_NEED_MORE=4
++# The total number of mana-producing lands at which the AI will stop considering scrying such lands to top
++SCRY_NUM_LANDS_TO_NOT_NEED_MORE=7
++# The total number of creatures when the AI will consider scrying away the ones that are below average in
++# evaluation score for the deck
++SCRY_NUM_CREATURES_TO_NOT_NEED_SUBPAR_ONES=4
++# The total number of creatures on board at which to start considering scrying away low CMC creatures
++# as defined in the two following options
++SCRY_EVALTHR_CREATCOUNT_TO_SCRY_AWAY_LOWCMC=3
++# The evaluation score at which the AI will consider the creature bad enough to scry it away in case it's
++# low CMC (see the next option) and the AI already has higher CMC creatures on board
++SCRY_EVALTHR_TO_SCRY_AWAY_LOWCMC_CREATURE=160
++# The CMC threshold at which (and below which) the AI considers creatures to be "low CMC" for the purpose
++# of the previous option
++SCRY_EVALTHR_CMC_THRESHOLD=3
++# If enabled, the AI will scry cards that it can't immediately cast to the bottom
++SCRY_IMMEDIATELY_UNCASTABLE_TO_BOTTOM=true
++# How big of a CMC difference between the currently castable and the considered card's CMC is allowed before
++# the card is considered not immediately castable for the purpose of the previous option
++SCRY_IMMEDIATELY_UNCASTABLE_CMC_DIFF=1
++# Surveil AI toggles (currently the AI uses Scry logic for the majority of decisions)
++# If the AI has this many or fewer cards in the library, it will Surveil to the top of the library in order
++# not to deplete the library.
++SURVEIL_NUM_CARDS_IN_LIBRARY_TO_BAIL=10
++# If the AI will have less life than the specified percentage as a result of activating a Surveil ability
++# that requires a life playment, it will not pay life to activate it (e.g. Doom Whisperer).
++SURVEIL_LIFEPERC_AFTER_PAYING_LIFE=60
++
++# Attempt to predict the number of potential blockers with various forms of evasion when
++# deciding to do an all-in assault attack
++COMBAT_ASSAULT_ATTACK_EVASION_PREDICTION=true
++# Attempt to predict the number of potential blockers with various forms of evasion when
++# deciding to do an attrition race attack
++COMBAT_ATTRITION_ATTACK_EVASION_PREDICTION=true
++
++# AILogic$ PayEnergyConservatively (used for Britsling Hydra and Longtusk Cub) will only
++# be used in case the creature is engaged in favorable combat
++CONSERVATIVE_ENERGY_PAYMENT_ONLY_IN_COMBAT=true
++# If true, the conservative energy payment will not be used when the creature is attacking,
++# only when it's blocking (for more controlling AIs)
++CONSERVATIVE_ENERGY_PAYMENT_ONLY_DEFENSIVELY=false
++
++# How big of a value difference there should be for the AI to consider mass bouncing all creature permanents
++# on both sides of the battlefield in a non-lethal situation
++BOUNCE_ALL_TO_HAND_CREAT_EVAL_DIFF=200
++BOUNCE_ALL_ELSEWHERE_CREAT_EVAL_DIFF=200
++# How big of a CMC difference there should be for the AI to consider mass bouncing all noncreature permanents
++# on both side of the battlefield
++BOUNCE_ALL_TO_HAND_NONCREAT_EVAL_DIFF=3
++BOUNCE_ALL_ELSEWHERE_NONCREAT_EVAL_DIFF=3
++
++# Use a blink spell to reload a planeswalker's loyalty (e.g. Teferi's Time Twist)
++# A chance (per check) to activate this ability
++BLINK_RELOAD_PLANESWALKER_CHANCE=30
++# Maximum loyalty at which the planeswalker needs to be in order to activate the blink-reload
++BLINK_RELOAD_PLANESWALKER_MAX_LOYALTY=2
++# The difference between maximum loyalty and base loyalty of the planeswalker in order to consider blink-reloading it
++BLINK_RELOAD_PLANESWALKER_LOYALTY_DIFF=2
++
++# If enabled, the AI will try to pair up cards to present to the opponent so that a specific card may be picked,
++# it'll also try to grab Accumulated Knowledge and Take Inventory more actively, as well as interact with the Trix
++# combo deck more appropriately. In Reanimator decks, this logic will make the AI pick the fattest threats in the
++# library to put some into the graveyard.
++INTUITION_ALTERNATIVE_LOGIC=true
++
++# If enabled, the AI will run some additional checks in order to try to preserve spells that have Buyback and not
++# use them unless absolutely necessary (or unless multiple copies are in hand).
++TRY_TO_PRESERVE_BUYBACK_SPELLS=true
++
++# How big of a difference is allowed between the revealed card CMC and the currently castable CMC to still put the
++# card on top of the library
++EXPLORE_MAX_CMC_DIFF_TO_PUT_IN_GRAVEYARD=2
++# The number of lands on the battlefield when the AI would use Explore to put non-land cards in graveyard if it
++# doesn't have a land in hand
++EXPLORE_NUM_LANDS_TO_STILL_NEED_MORE=2
++
++# Momir/MoJhoSto casual variant properties
++# Which lands the AI would prefer to play in Momir Basic and MoJhoSto modes. When set to "default", generally plays
++# lands in WUBRG order. When set to "random", will play a completely random basic land from hand. When set to
++# "preforder:XXX", where "XXX" is a list of color specifications, will play basic lands in this preferred order,
++# and if no preferred land can be found, will play a random one (e.g. "preforder:RB" plays Mountains first, Swamps
++# second, and then everything else randomly if no Mountains or Swamps are present).
++MOMIR_BASIC_LAND_STRATEGY=default
++# MoJhoSto only casual variant properties
++# How many lands the AI needs to have on the battlefield to begin considering activating Jhoira in MoJhoSto
++MOJHOSTO_NUM_LANDS_TO_ACTIVATE_JHOIRA=4
++# The chance that the AI will activate Jhoira instead of activating Momir
++MOJHOSTO_CHANCE_TO_PREFER_JHOIRA_OVER_MOMIR=50
++# The chance that the AI will activate Jhoira's copy random instant ability (per phase, the AI will generally
++# attempt this either in its upkeep or its draw phase or main 1).
++MOJHOSTO_CHANCE_TO_USE_JHOIRA_COPY_INSTANT=20
++
++# Master toggle for the following options setting the default AIPreference:SacCost handling.
++SACRIFICE_DEFAULT_PREF_ENABLE=false
++# If a card has no card-specific AIPreference for the Sacrifice cost (AIPreference:SacCost), the AI will still
++# consider the sacrifice of a matching card if its mana value (CMC) matches the specified minimum
++SACRIFICE_DEFAULT_PREF_MIN_CMC=0
++# If a card has no card-specific AIPreference for the Sacrifice cost (AIPreference:SacCost), the AI will still
++# consider the sacrifice of a matching card if its mana value (CMC) matches the specified maximum
++SACRIFICE_DEFAULT_PREF_MAX_CMC=2
++# If a card has no card-specific AIPreference for the Sacrifice cost (AIPreference:SacCost), the AI will still
++# consider the sacrifice of a matching card is a token
++SACRIFICE_DEFAULT_PREF_ALLOW_TOKENS=true
++# A creature should evaluate to no more than this much to be considered for default SacCost preference
++SACRIFICE_DEFAULT_PREF_MAX_CREATURE_EVAL=135
++
++# Enable sideboarding in limited formats (e.g. Sealed, Draft)
++SIDEBOARDING_IN_LIMITED_FORMATS=false
++# Chance to proceed with sideboarding any given pair of cards in the devised sideboarding plan
++SIDEBOARDING_CHANCE_PER_CARD=50
++# Chance to do some sideboarding after winning a game
++SIDEBOARDING_CHANCE_ON_WIN=0
++# Only allow replacing a card with another card that shares the same core types. If disabled, mixing types will be
++# allowed, although a creature is still only replaced with another creature (or planeswalker, see the next option)
++SIDEBOARDING_SHARED_TYPE_ONLY=false
++# Allow replacing a creature with a planeswalker and vice versa when sideboarding if the previous option is disabled
++SIDEBOARDING_PLANESWALKER_EQ_CREATURE=false
++
++# Flat Monte Carlo: maximum search for strong desktops; slow on phones. No hidden information is used.
++FLAT_MC_MAX_CANDIDATES=4
++FLAT_MC_ROLLOUTS_PER_CANDIDATE=2
++FLAT_MC_MAX_PLAYOUT_PLAYS=6
++FLAT_MC_COMBO_PLAYOUT_PLAYS=16
++FLAT_MC_DECISION_BUDGET_MS=300
++FLAT_MC_TURN_BUDGET_MS=1500
++FLAT_MC_HEURISTIC_BONUS=60
++FLAT_MC_CONSIDER_HOLDING=true
++FLAT_MC_HOLD_MANA_WEIGHT=80
++FLAT_MC_RISK_WEIGHT=100
++FLAT_MC_OVERRIDE_MAJORITY=50
++FLAT_MC_EXTRA_ROUNDS=1
++FLAT_MC_PRUNING=true
++FLAT_MC_CATEGORY_HOLD=true
++FLAT_MC_ADAPTIVE_PLAYOUT=true
++FLAT_MC_TARGET_VARIANTS=2
++FLAT_MC_ENABLED=true
++FLAT_MC_STRATEGIC_WEIGHT=100
++FLAT_MC_DISCOVERY=true
++FLAT_MC_EXTRA_CANDIDATES=1
++FLAT_MC_LAND_CHOICE=true
++FLAT_MC_REACTIVE=true
+diff --git a/forge-gui/res/ai/CedhPatient.ai b/forge-gui/res/ai/CedhPatient.ai
+new file mode 100644
+index 00000000..7b733451
+--- /dev/null
++++ b/forge-gui/res/ai/CedhPatient.ai
+@@ -0,0 +1,351 @@
++# The amount of cards at which to stop considering mulligan
++MULLIGAN_THRESHOLD=4
++
++# Aggro preferences (enabling these will generally make the AI attack more aggressively into potential trades)
++# If the following option is enabled, the AI will generally play aggressively, seeking trades on offense when possible
++# (the following two parameters will then be ignored)
++PLAY_AGGRO=false
++# The chance to attack aggressively into a potential trade (works even if not playing all-out aggro, e.g. PLAY_AGGRO disabled,
++# but only in more favorable conditions in that case - when ahead in life count and in parity or ahead in creature count)
++CHANCE_TO_ATTACK_INTO_TRADE=0
++# When enabled, the AI will attack into trading options when it's tapped out (note that this flag is ignored if PLAY_AGGRO
++# is globally enabled). If disabled, the non-aggro AI will only attack into trades when it has mana open, thus having a chance
++# to "bluff" (or use, if available) combat tricks at the same time.
++ATTACK_INTO_TRADE_WHEN_TAPPED_OUT=false
++# If enabled, the AI will only randomly attack into a trade if its life pressure is lower than the opponent's.
++RANDOMLY_ATKTRADE_ONLY_ON_LOWER_LIFE_PRESSURE=true
++# When above zero, the AI will attack into trading options when the opponent is not tapped out, thus risking getting an
++# unexpected combat trick or ability activation. Note that this chance is rolled separately after CHANCE_TO_ATTACK_INTO_TRADE
++# has already succeeded.
++CHANCE_TO_ATKTRADE_WHEN_OPP_HAS_MANA=30
++# When enabled, the AI will run some additional checks in an attempt to avoid attacking into certain block situations
++# when it can't deal at least some permanent damage to the defending creature/planeswalker or to at least one defending
++# creature. Works in many but not all cases.
++TRY_TO_AVOID_ATTACKING_INTO_CERTAIN_BLOCK=true
++# When enabled, the AI will use Berserk on offense to try to severely damage the opponent at the expense of the creature
++USE_BERSERK_AGGRESSIVELY=true
++# Try to hold combat tricks until blockers are declared in an attempt to trick the opponent into blocking a weak creature
++# and dying to it (currently has some limitations, the AI will only try to do it to one creature per turn)
++TRY_TO_HOLD_COMBAT_TRICKS_UNTIL_BLOCK=true
++# Chance to hold combat tricks until blockers are declared. If -1 is specified, this chance is not used, and the standard
++# evaluation for offensive pump buff is used instead.
++CHANCE_TO_HOLD_COMBAT_TRICKS_UNTIL_BLOCK=65
++
++# Trade blocking preferences (enabling these will make the AI trade more aggressively when considering blocks,
++# but only with creatures that are worse in abilities and have lower or the same power as the attacker). Note
++# that the first option serves as a master toggle. If it is disabled, the following related options have no effect.
++ENABLE_RANDOM_FAVORABLE_TRADES_ON_BLOCK=true
++# If enabled, the AI will consider trade blocking even if its creature count is lower than the opponent's
++RANDOMLY_TRADE_EVEN_WHEN_HAVE_LESS_CREATS=false
++# If the previous option is enabled, then the next option controls how big of a handicap in creature count the AI
++# is allowed to have to still decide to trade
++MAX_DIFF_IN_CREATURE_COUNT_TO_TRADE=1
++# If enabled, the AI will also consider trading if it has a replacement creature in hand
++ALSO_TRADE_WHEN_HAVE_A_REPLACEMENT_CREAT=true
++# The allowed handicap in creature count when the AI wants to trade while having a replacement creature in hand
++MAX_DIFF_IN_CREATURE_COUNT_TO_TRADE_WITH_REPL=1
++# Min and max chance to randomly aggressively trade when blocking (note that it will become 100 if the AI is in danger)
++MIN_CHANCE_TO_RANDOMLY_TRADE_ON_BLOCK=30
++MAX_CHANCE_TO_RANDOMLY_TRADE_ON_BLOCK=70
++# The decrease amount for the trade chance when trading against a non-token Embalm/Eternalize creature with a non-token
++# creature that does not have Embalm/Eternalize
++CHANCE_DECREASE_TO_TRADE_VS_EMBALM=30
++
++# Options to save / preserve loyalty of planeswalkers
++# Chance to trade a (worse or roughly equal) creature in order to save a planeswalker or preserve its loyalty
++# (random favorable trades must be enabled)
++CHANCE_TO_TRADE_TO_SAVE_PLANESWALKER=70
++# Chance to trade a better creature for a worse one in order to save a planeswalker
++CHANCE_TO_TRADE_DOWN_TO_SAVE_PLANESWALKER=0
++# Creature evaluation threshold for which creatures to consider good candidates for chump blocking to protect a
++# planeswalker (135 is about the level of a 1/2 nontoken creature with no abilities or a 2/2 token with no abilities)
++# There is a separate option for evaluating token and nontoken creatures. Set both to -1 to disable chump blocking
++# to protect planeswalkers.
++THRESHOLD_NONTOKEN_CHUMP_TO_SAVE_PLANESWALKER=120
++THRESHOLD_TOKEN_CHUMP_TO_SAVE_PLANESWALKER=135
++# If enabled, the AI will not bother chump blocking to protect a planeswalker unless lethal damage is threatened to it
++CHUMP_TO_SAVE_PLANESWALKER_ONLY_ON_LETHAL=true
++
++# Options that allow the AI to attempt to optimize targeting for removal and damaging spells.
++# If enabled, the AI will try not to target a creature with a damaging spell or spot removal in case
++# this creature will die in current combat or to a spell which is currently on stack targeting it.
++AVOID_TARGETING_CREATS_THAT_WILL_DIE=true
++# If enabled, the AI will not evaluate the stack in case at least one counterspell is present on it,
++# since the current AI is not smart enough to predict whether a kill spell on stack is countered or not.
++DONT_EVAL_KILLSPELLS_ON_STACK_WITH_PERMISSION=true
++
++# If AI would drop to this amount of life in combat, it'll try to defend itself more actively
++AI_IN_DANGER_THRESHOLD=6
++# If set to the same value, AI will be predictable. If set to higher, AI will randomly pick a value between the two
++# for each evaluation, introducing some unpredictability.
++AI_IN_DANGER_MAX_THRESHOLD=6
++
++# Only works when AI cheating is enabled in preferences, otherwise does nothing
++CHEAT_WITH_MANA_ON_SHUFFLE=false
++
++# The chance for the AI to attempt to hold land drops until Main 2 when it's safe and when it has nothing to potentially
++# do with the extra mana
++HOLD_LAND_DROP_FOR_MAIN2_IF_UNUSED=100
++# If enabled, the AI will not try to conceal its land drops until Main 2 if the only permanents it has in play are lands
++# (usually in this case this accomplishes little but confuses the game a bit; disable for a little bit more unpredictability)
++HOLD_LAND_DROP_ONLY_IF_HAVE_OTHER_PERMS=true
++
++# Planechase logic
++DEFAULT_MAX_PLANAR_DIE_ROLLS_PER_TURN=1
++DEFAULT_MIN_TURN_TO_ROLL_PLANAR_DIE=3
++DEFAULT_PLANAR_DIE_ROLL_CHANCE=50
++PLANAR_DIE_ROLL_HESITATION_CHANCE=10
++
++# Timings for moving equipment to other targets
++MOVE_EQUIPMENT_TO_BETTER_CREATURES=from_useless_only
++MOVE_EQUIPMENT_CREATURE_EVAL_THRESHOLD=60
++PRIORITIZE_MOVE_EQUIPMENT_IF_USELESS=true
++# If there's a sacrifice cost to reattach an aura/equipment to another target creature, how big of an evaluation difference
++# should there be between the old target and the new one for the AI to decide to proceed with it.
++SAC_TO_REATTACH_TARGET_EVAL_THRESHOLD=400
++
++# Currently disabled
++PREDICT_SPELLS_FOR_MAIN2=true
++RESERVE_MANA_FOR_MAIN2_CHANCE=100
++
++# If enabled, the AI will protect its permanents against curse auras with Hexproof, Shroud, and Protection
++ACTIVELY_PROTECT_VS_CURSE_AURAS=true
++
++# If enabled, the AI will target artifacts and non-aura enchantments with removal aggressively
++ACTIVELY_DESTROY_ARTS_AND_NONAURA_ENCHS=true
++
++# If enabled, the AI will prioritize removing creatures that it can't block at all (e.g. Flying in absence of flying
++# blockers). This is a master toggle. If disabled, the following three options do nothing.
++ACTIVELY_DESTROY_IMMEDIATELY_UNBLOCKABLE=true
++# How many unblockable creatures can there be when the AI should still consider prioritizing something (when there are
++# too many, probably it's just worth going for the biggest threat overall instead)
++DESTROY_IMMEDIATELY_UNBLOCKABLE_THRESHOLD=2
++# Only consider prioritizing the destruction of immediately unblockable creatures if life is in danger
++DESTROY_IMMEDIATELY_UNBLOCKABLE_ONLY_IN_DNGR=true
++# How much life can there remain after a swing of the immediately unblockable creature for it to be considered dangerous
++# for the purpose of previous option
++DESTROY_IMMEDIATELY_UNBLOCKABLE_LIFE_IN_DNGR=5
++
++# The chance that the AI will try to chain two damage spells or a damage spell and a debuffing pump spell to try to
++# kill a bigger creature or a planeswalker. If set to 0, will be disabled. When enabled, will automatically become 100
++# if the AI is in danger of dying.
++CHANCE_TO_CHAIN_TWO_DAMAGE_SPELLS=90
++
++# The chance that the AI will try to hold on to a direct damage spell with X in its cost (e.g. Blaze, Fireball, etc.)
++# so that it doesn't cast it too early in the game against an early game target. Note that when in danger or when the
++# AI has a chance to finish the opponent off with such a spell, it will not hold back the spells.
++HOLD_X_DAMAGE_SPELLS_FOR_MORE_DAMAGE_CHANCE=100
++# This threshold defines the minimum amount of damage *or* the minimum number of the AI's turn in order to play a
++# direct damage spell with X without holding it back. For example, if set to 5, the AI will prefer to hold the spell
++# back (unless lethal/in danger) unless it can deal 5 or more damage with it or unless it's the AI's 5th turn or later.
++HOLD_X_DAMAGE_SPELLS_THRESHOLD=5
++
++# Permission timings
++MIN_SPELL_CMC_TO_COUNTER=0
++CHANCE_TO_COUNTER_CMC_1=100
++CHANCE_TO_COUNTER_CMC_2=100
++CHANCE_TO_COUNTER_CMC_3=100
++ALWAYS_COUNTER_OTHER_COUNTERSPELLS=true
++ALWAYS_COUNTER_DAMAGE_SPELLS=true
++ALWAYS_COUNTER_CMC_0_MANA_MAKING_PERMS=true
++ALWAYS_COUNTER_REMOVAL_SPELLS=true
++ALWAYS_COUNTER_PUMP_SPELLS=true
++ALWAYS_COUNTER_AURAS=true
++ALWAYS_COUNTER_SPELLS_FROM_NAMED_CARDS=None
++
++# Copy spell on stack logic
++# The chance that the AI will copy its own stack right after placing it there while it has priority
++CHANCE_TO_COPY_OWN_SPELL_WHILE_ON_STACK=30
++# If the copied spell costs this much more than the copy spell, the chance to copy the spell will become 100
++ALWAYS_COPY_SPELL_IF_CMC_DIFF=2
++
++# Storm spell logic
++PRIORITY_REDUCTION_FOR_STORM_SPELLS=9
++MIN_COUNT_FOR_STORM_SPELLS=1
++
++# Logic for Strip Mine, Wasteland, and other similar sac-destroy land cards.
++# Ghost Quarter uses AILogic$ GhostQuarter for its replacement-land caution.
++STRIPMINE_MIN_LANDS_IN_HAND_TO_ACTIVATE=1
++STRIPMINE_MIN_LANDS_FOR_NO_TIMING_CHECK=9999
++STRIPMINE_MIN_LANDS_OTB_FOR_NO_TEMPO_CHECK=6
++STRIPMINE_MAX_LANDS_TO_ATTEMPT_MANALOCKING=3
++STRIPMINE_HIGH_PRIORITY_ON_SKIPPED_LANDDROP=true
++
++# The default chance to use the token-generation abilities
++TOKEN_GENERATION_ABILITY_CHANCE=80
++# Situations where the AI should always use the token-generation abilities if possible
++TOKEN_GENERATION_ALWAYS_IF_FROM_PLANESWALKER=true
++TOKEN_GENERATION_ALWAYS_IF_OPP_ATTACKS=true
++
++# Flash AI toggles
++# Master toggle: if enabled, a more advanced Flash consideration logic will be enabled (probably slower),
++# which will also enable all the following toggles.
++FLASH_ENABLE_ADVANCED_LOGIC=true
++# The chance the AI will obey SVar AmbushAI to try to surprise the opponent after the attack is declared
++# (e.g. Hixus, Prison Warden)
++FLASH_CHANCE_TO_OBEY_AMBUSHAI=100
++# The chance the AI will cast the Flash creature at instant speed purely for the fact that it has a ETB effect.
++FLASH_CHANCE_TO_CAST_DUE_TO_ETB_EFFECTS=100
++# The chance the AI may cast the Flash creature with ETB effects even earlier than its own Main 1 to try to benefit
++# from the ETB effect (most likely suboptimal and many mana lock the AI, so keep this at a lower chance normally).
++FLASH_CHANCE_TO_CAST_FOR_ETB_BEFORE_MAIN1=10
++# The chance the AI may cast the Flash creature with ETB effects in response to an opposing spell on stack.
++# Quite basic right now, and may do stupid things more often than not, so better left disabled until improved
++# (or at a low chance).
++FLASH_CHANCE_TO_RESPOND_TO_STACK_WITH_ETB=0
++# The chance the AI will attempt to add a new blocker in combat where it's low on creature count compared to the
++# number of attacking creatures.
++FLASH_CHANCE_TO_CAST_AS_VALUABLE_BLOCKER=100
++# If enabled, the AI will try to hold off playing auras with Flash until the declare blockers step in combat.
++# If disabled, but advanced logic is enabled, will generally try to play these auras before its own turn.
++FLASH_USE_BUFF_AURAS_AS_COMBAT_TRICKS=true
++# The chance that the AI will cast a flash aura enchantment at the earliest opportunity
++FLASH_BUFF_AURA_CHANCE_TO_CAST_EARLY=1
++# The chance that the AI will cast a flash aura at the end of turn before its own turn
++FLASH_BUFF_AURA_CHANCE_CAST_AT_EOT=5
++# The chance that the AI will respond to stack with a flash aura which makes sense in context
++FLASH_BUFF_AURA_CHANCE_TO_RESPOND_TO_STACK=100
++
++# Scry AI toggles
++# The total number of mana-producing lands at which the AI will still consider scrying away non-lands
++SCRY_NUM_LANDS_TO_STILL_NEED_MORE=4
++# The total number of mana-producing lands at which the AI will stop considering scrying such lands to top
++SCRY_NUM_LANDS_TO_NOT_NEED_MORE=7
++# The total number of creatures when the AI will consider scrying away the ones that are below average in
++# evaluation score for the deck
++SCRY_NUM_CREATURES_TO_NOT_NEED_SUBPAR_ONES=4
++# The total number of creatures on board at which to start considering scrying away low CMC creatures
++# as defined in the two following options
++SCRY_EVALTHR_CREATCOUNT_TO_SCRY_AWAY_LOWCMC=3
++# The evaluation score at which the AI will consider the creature bad enough to scry it away in case it's
++# low CMC (see the next option) and the AI already has higher CMC creatures on board
++SCRY_EVALTHR_TO_SCRY_AWAY_LOWCMC_CREATURE=160
++# The CMC threshold at which (and below which) the AI considers creatures to be "low CMC" for the purpose
++# of the previous option
++SCRY_EVALTHR_CMC_THRESHOLD=3
++# If enabled, the AI will scry cards that it can't immediately cast to the bottom
++SCRY_IMMEDIATELY_UNCASTABLE_TO_BOTTOM=true
++# How big of a CMC difference between the currently castable and the considered card's CMC is allowed before
++# the card is considered not immediately castable for the purpose of the previous option
++SCRY_IMMEDIATELY_UNCASTABLE_CMC_DIFF=1
++# Surveil AI toggles (currently the AI uses Scry logic for the majority of decisions)
++# If the AI has this many or fewer cards in the library, it will Surveil to the top of the library in order
++# not to deplete the library.
++SURVEIL_NUM_CARDS_IN_LIBRARY_TO_BAIL=10
++# If the AI will have less life than the specified percentage as a result of activating a Surveil ability
++# that requires a life playment, it will not pay life to activate it (e.g. Doom Whisperer).
++SURVEIL_LIFEPERC_AFTER_PAYING_LIFE=60
++
++# Attempt to predict the number of potential blockers with various forms of evasion when
++# deciding to do an all-in assault attack
++COMBAT_ASSAULT_ATTACK_EVASION_PREDICTION=true
++# Attempt to predict the number of potential blockers with various forms of evasion when
++# deciding to do an attrition race attack
++COMBAT_ATTRITION_ATTACK_EVASION_PREDICTION=true
++
++# AILogic$ PayEnergyConservatively (used for Britsling Hydra and Longtusk Cub) will only
++# be used in case the creature is engaged in favorable combat
++CONSERVATIVE_ENERGY_PAYMENT_ONLY_IN_COMBAT=true
++# If true, the conservative energy payment will not be used when the creature is attacking,
++# only when it's blocking (for more controlling AIs)
++CONSERVATIVE_ENERGY_PAYMENT_ONLY_DEFENSIVELY=false
++
++# How big of a value difference there should be for the AI to consider mass bouncing all creature permanents
++# on both sides of the battlefield in a non-lethal situation
++BOUNCE_ALL_TO_HAND_CREAT_EVAL_DIFF=200
++BOUNCE_ALL_ELSEWHERE_CREAT_EVAL_DIFF=200
++# How big of a CMC difference there should be for the AI to consider mass bouncing all noncreature permanents
++# on both side of the battlefield
++BOUNCE_ALL_TO_HAND_NONCREAT_EVAL_DIFF=3
++BOUNCE_ALL_ELSEWHERE_NONCREAT_EVAL_DIFF=3
++
++# Use a blink spell to reload a planeswalker's loyalty (e.g. Teferi's Time Twist)
++# A chance (per check) to activate this ability
++BLINK_RELOAD_PLANESWALKER_CHANCE=30
++# Maximum loyalty at which the planeswalker needs to be in order to activate the blink-reload
++BLINK_RELOAD_PLANESWALKER_MAX_LOYALTY=2
++# The difference between maximum loyalty and base loyalty of the planeswalker in order to consider blink-reloading it
++BLINK_RELOAD_PLANESWALKER_LOYALTY_DIFF=2
++
++# If enabled, the AI will try to pair up cards to present to the opponent so that a specific card may be picked,
++# it'll also try to grab Accumulated Knowledge and Take Inventory more actively, as well as interact with the Trix
++# combo deck more appropriately. In Reanimator decks, this logic will make the AI pick the fattest threats in the
++# library to put some into the graveyard.
++INTUITION_ALTERNATIVE_LOGIC=true
++
++# If enabled, the AI will run some additional checks in order to try to preserve spells that have Buyback and not
++# use them unless absolutely necessary (or unless multiple copies are in hand).
++TRY_TO_PRESERVE_BUYBACK_SPELLS=true
++
++# How big of a difference is allowed between the revealed card CMC and the currently castable CMC to still put the
++# card on top of the library
++EXPLORE_MAX_CMC_DIFF_TO_PUT_IN_GRAVEYARD=2
++# The number of lands on the battlefield when the AI would use Explore to put non-land cards in graveyard if it
++# doesn't have a land in hand
++EXPLORE_NUM_LANDS_TO_STILL_NEED_MORE=2
++
++# Momir/MoJhoSto casual variant properties
++# Which lands the AI would prefer to play in Momir Basic and MoJhoSto modes. When set to "default", generally plays
++# lands in WUBRG order. When set to "random", will play a completely random basic land from hand. When set to
++# "preforder:XXX", where "XXX" is a list of color specifications, will play basic lands in this preferred order,
++# and if no preferred land can be found, will play a random one (e.g. "preforder:RB" plays Mountains first, Swamps
++# second, and then everything else randomly if no Mountains or Swamps are present).
++MOMIR_BASIC_LAND_STRATEGY=default
++# MoJhoSto only casual variant properties
++# How many lands the AI needs to have on the battlefield to begin considering activating Jhoira in MoJhoSto
++MOJHOSTO_NUM_LANDS_TO_ACTIVATE_JHOIRA=4
++# The chance that the AI will activate Jhoira instead of activating Momir
++MOJHOSTO_CHANCE_TO_PREFER_JHOIRA_OVER_MOMIR=50
++# The chance that the AI will activate Jhoira's copy random instant ability (per phase, the AI will generally
++# attempt this either in its upkeep or its draw phase or main 1).
++MOJHOSTO_CHANCE_TO_USE_JHOIRA_COPY_INSTANT=20
++
++# Master toggle for the following options setting the default AIPreference:SacCost handling.
++SACRIFICE_DEFAULT_PREF_ENABLE=false
++# If a card has no card-specific AIPreference for the Sacrifice cost (AIPreference:SacCost), the AI will still
++# consider the sacrifice of a matching card if its mana value (CMC) matches the specified minimum
++SACRIFICE_DEFAULT_PREF_MIN_CMC=0
++# If a card has no card-specific AIPreference for the Sacrifice cost (AIPreference:SacCost), the AI will still
++# consider the sacrifice of a matching card if its mana value (CMC) matches the specified maximum
++SACRIFICE_DEFAULT_PREF_MAX_CMC=2
++# If a card has no card-specific AIPreference for the Sacrifice cost (AIPreference:SacCost), the AI will still
++# consider the sacrifice of a matching card is a token
++SACRIFICE_DEFAULT_PREF_ALLOW_TOKENS=true
++# A creature should evaluate to no more than this much to be considered for default SacCost preference
++SACRIFICE_DEFAULT_PREF_MAX_CREATURE_EVAL=135
++
++# Enable sideboarding in limited formats (e.g. Sealed, Draft)
++SIDEBOARDING_IN_LIMITED_FORMATS=false
++# Chance to proceed with sideboarding any given pair of cards in the devised sideboarding plan
++SIDEBOARDING_CHANCE_PER_CARD=50
++# Chance to do some sideboarding after winning a game
++SIDEBOARDING_CHANCE_ON_WIN=0
++# Only allow replacing a card with another card that shares the same core types. If disabled, mixing types will be
++# allowed, although a creature is still only replaced with another creature (or planeswalker, see the next option)
++SIDEBOARDING_SHARED_TYPE_ONLY=false
++# Allow replacing a creature with a planeswalker and vice versa when sideboarding if the previous option is disabled
++SIDEBOARDING_PLANESWALKER_EQ_CREATURE=false
++
++# Flat Monte Carlo: maximum search for strong desktops; slow on phones. No hidden information is used.
++FLAT_MC_MAX_CANDIDATES=4
++FLAT_MC_ROLLOUTS_PER_CANDIDATE=2
++FLAT_MC_MAX_PLAYOUT_PLAYS=6
++FLAT_MC_COMBO_PLAYOUT_PLAYS=16
++FLAT_MC_DECISION_BUDGET_MS=300
++FLAT_MC_TURN_BUDGET_MS=1500
++FLAT_MC_HEURISTIC_BONUS=60
++FLAT_MC_CONSIDER_HOLDING=true
++FLAT_MC_HOLD_MANA_WEIGHT=170
++FLAT_MC_RISK_WEIGHT=190
++FLAT_MC_OVERRIDE_MAJORITY=50
++FLAT_MC_EXTRA_ROUNDS=1
++FLAT_MC_PRUNING=true
++FLAT_MC_CATEGORY_HOLD=true
++FLAT_MC_ADAPTIVE_PLAYOUT=true
++FLAT_MC_TARGET_VARIANTS=2
++FLAT_MC_ENABLED=true
++FLAT_MC_STRATEGIC_WEIGHT=100
++FLAT_MC_DISCOVERY=true
++FLAT_MC_EXTRA_CANDIDATES=1
++FLAT_MC_LAND_CHOICE=true
++FLAT_MC_REACTIVE=true

@@ -1,0 +1,3 @@
+# Thassa's Oracle with Demonic Consultation and the mana for both: cast the Oracle, Consultation in response.
+hero hand: Thassa's Oracle; Demonic Consultation
+hero battlefield: Underground Sea; Underground Sea; Island; Island; Scrubland

@@ -1,0 +1,3 @@
+# Thassa's Oracle with Tainted Pact: Pact in response to the Oracle trigger, taking nothing.
+hero hand: Thassa's Oracle; Tainted Pact
+hero battlefield: Underground Sea; Underground Sea; Island; Island; Scrubland

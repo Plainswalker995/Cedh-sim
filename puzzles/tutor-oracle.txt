@@ -1,0 +1,3 @@
+# Demonic Tutor and Demonic Consultation in hand, five lands: tutor for the Oracle, then the Oracle line.
+hero hand: Demonic Tutor; Demonic Consultation
+hero battlefield: Underground Sea; Underground Sea; Island; Island; Scrubland

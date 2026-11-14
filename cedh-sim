@@ -1,0 +1,4 @@
+#!/bin/sh
+# cedh-sim launcher for macOS and Linux: sh cedh-sim run 120
+cd "$(dirname "$0")" || exit 1
+exec python3 -m cedh_sim "$@"

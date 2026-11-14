@@ -1,0 +1,2 @@
+# Needed only for the learning layer (cedh-sim train / auto). Everything else is the Python standard library.
+numpy>=1.24

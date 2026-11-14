@@ -1,0 +1,3 @@
+# Example deck for the setup check: a commander and basic lands only. Not a real list.
+Commander: Sheoldred, the Apocalypse
+99 Swamp

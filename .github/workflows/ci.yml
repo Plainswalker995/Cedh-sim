@@ -1,0 +1,41 @@
+name: build and smoke test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Python unit checks
+        run: python -m unittest discover -s tests -v
+      - name: Build patched Forge (macOS, Linux)
+        if: runner.os != 'Windows'
+        run: bash scripts/setup.sh
+      - name: Build patched Forge (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/setup.ps1
+      - name: Smoke test, two short games
+        shell: bash
+        run: |
+          python -m cedh_sim refresh-pool --from examples/pool
+          python -m cedh_sim run 2 --deck examples/hero.txt --rounds 2 --jobs 1 --seed 1 --quiet
+          python -m cedh_sim report

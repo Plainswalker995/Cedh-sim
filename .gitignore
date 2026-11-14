@@ -1,0 +1,12 @@
+# Your own settings, decks, data and results stay on your machine
+config.json
+decks/
+data/
+games/
+cache/
+models/
+forge/
+# Python
+__pycache__/
+*.pyc
+.venv/
