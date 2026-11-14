@@ -1,5 +1,5 @@
 diff --git a/forge-ai/src/main/java/forge/ai/AiController.java b/forge-ai/src/main/java/forge/ai/AiController.java
-index dd2a6e13..3a3cb0df 100644
+index dd2a6e13..5157cc5f 100644
 --- a/forge-ai/src/main/java/forge/ai/AiController.java
 +++ b/forge-ai/src/main/java/forge/ai/AiController.java
 @@ -2155,6 +2155,8 @@ public class AiController {
@@ -31,6 +31,20 @@ index dd2a6e13..3a3cb0df 100644
          if (flatMc && game.getStack().isEmpty()) {
              // Stiflenought: the Dreadnought is cast as soon as its Stifle can be paid for as well, without rollouts
              final SpellAbility sureStifle = StifleCombo.sureCast(player, saList);
+@@ -3636,6 +3642,13 @@ public class AiController {
+             return simPicker.chooseCardToHiddenOriginChangeZone(destination, origin, sa, fetchList, player2, decider);
+         }
+ 
++        if (decider == player && (ZoneType.Hand.equals(destination) || ZoneType.Library.equals(destination))) {
++            // the missing half of Thassa's Oracle with Consultation or Pact
++            final Card oracleHalf = forge.ai.simulation.CedhPilot.winTutorPick(decider, sa, fetchList);
++            if (oracleHalf != null) {
++                return oracleHalf;
++            }
++        }
+         if (decider == player && sa.getApi() != ApiType.Learn) {
+             // the win card of a cheating spell, the creature to put into the graveyard: what the deck is built for
+             final Card tinkered = flatMonteCarloActive() && destination == ZoneType.Battlefield && origin.contains(ZoneType.Library)
 diff --git a/forge-ai/src/main/java/forge/ai/ComputerUtil.java b/forge-ai/src/main/java/forge/ai/ComputerUtil.java
 index 3d6fffd1..eba827d8 100644
 --- a/forge-ai/src/main/java/forge/ai/ComputerUtil.java
@@ -110,10 +124,10 @@ index a7d795ed..916947b6 100644
              for (final Player o : ai.getOpponents()) {
 diff --git a/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java b/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java
 new file mode 100644
-index 00000000..756c567d
+index 00000000..3a9e9f82
 --- /dev/null
 +++ b/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java
-@@ -0,0 +1,463 @@
+@@ -0,0 +1,490 @@
 +package forge.ai.simulation;
 +
 +import java.util.ArrayList;
@@ -278,7 +292,10 @@ index 00000000..756c567d
 +            return null;
 +        }
 +        if (ai.getCardsIn(ZoneType.Library).size() <= 2 && !ai.cantWin()) {
-+            final SpellAbility o = castOf(ai, candidates, ORACLE);
++            SpellAbility o = castOf(ai, candidates, ORACLE);
++            if (o == null && has(ai, ORACLE, ZoneType.Graveyard) && crackLed(ai)) {
++                o = castOf(ai, candidates, ORACLE);
++            }
 +            if (o != null) {
 +                note(game, "PLAN " + ai.getName() + " escapes Thassa's Oracle with an empty library");
 +                return o;
@@ -293,7 +310,11 @@ index 00000000..756c567d
 +                return l;
 +            }
 +        }
-+        final SpellAbility f = castOf(ai, candidates, FREEZE);
++        SpellAbility f = castOf(ai, candidates, FREEZE);
++        if (f == null && has(ai, FREEZE, ZoneType.Graveyard) && !has(ai, FREEZE, ZoneType.Hand)
++                && ai.getCardsIn(ZoneType.Graveyard).size() >= 4 && crackLed(ai)) {
++            f = castOf(ai, candidates, FREEZE);
++        }
 +        if (f != null) {
 +            final Player t = breachMillTarget(ai, f);
 +            if (t != null) {
@@ -413,6 +434,26 @@ index 00000000..756c567d
 +            }
 +        }
 +        return true;
++    }
++
++    /** Sacrifices Lion's Eye Diamond for three blue mana, to keep a Breach loop going. */
++    static boolean crackLed(final Player ai) {
++        for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
++            if (!LED.equals(c.getName())) {
++                continue;
++            }
++            for (final SpellAbility ma : c.getManaAbilities()) {
++                ma.setActivatingPlayer(ai);
++                if (ma.getManaPart() != null) {
++                    ma.getManaPart().setExpressChoice("U");
++                }
++                if (ma.canPlay() && forge.ai.ComputerUtil.playNoStack(ai, ma, ai.getGame(), false)) {
++                    note(ai.getGame(), "LINE " + ai.getName() + " Breach loop: cracks Lion's Eye Diamond for blue");
++                    return true;
++                }
++            }
++        }
++        return false;
 +    }
 +
 +    /** Pending mill from Brain Freezes already on the stack, per player. */
