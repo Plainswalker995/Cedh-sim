@@ -64,11 +64,32 @@ def run_puzzles(games_each: int = 8, jobs: int | None = None) -> dict:
         opts = {"rounds": 3, "slip": 0.0, "nostyles": True, "mc": "on", "scenario": pz}
         recs = engine.run_batch(DEFAULT_DECK, ensure_pool(None), games_each, random.randrange(1, 10**9), d,
                                 jobs=jobs, opts=opts, quiet=True)
-        conv = sum(1 for r in recs if r.get("winner") == r.get("hero") and r.get("winner_turns") == 1
-                   and analysis.win_kind(r.get("how")) == "combo")
-        results[pz.stem] = {"games": len(recs), "converted": conv, "folder": str(d)}
+        key = "Thassa's Oracle"
+        for line in pz.read_text(encoding="utf-8").splitlines():
+            if line.lower().startswith("# key:"):
+                key = line.split(":", 1)[1].strip()
+        conv = sum(1 for r in recs if converted(r))
+        tried = sum(1 for r in recs if attempted(r, key))
+        results[pz.stem] = {"games": len(recs), "converted": conv, "attempted": tried, "key": key, "folder": str(d)}
     _save("puzzles", {"date": dt.date.today().isoformat(), "results": results})
     return results
+
+
+def converted(r: dict) -> bool:
+    """Won by combo before or during its own first turn."""
+    return (r.get("winner") == r.get("hero") and (r.get("winner_turns") or 0) <= 1
+            and analysis.win_kind(r.get("how")) == "combo")
+
+
+def attempted(r: dict, key: str) -> bool:
+    """Went for the line in the first round (cast the key card by game turn 4), whether or not it was stopped."""
+    hero = r.get("hero")
+    for k in r.get("key_plays") or []:
+        m = k.split(":", 1)
+        if len(m) == 2 and m[0].startswith("T") and m[0][1:].isdigit() and int(m[0][1:]) <= 4 \
+                and f"{hero} cast {key}" in k:
+            return True
+    return converted(r)
 
 
 def _all_records(kind_filter=("run",)) -> list[dict]:
@@ -183,8 +204,11 @@ def scorecard(run_known: bool = False, run_puzzles: bool = False, games: int = 2
         tot = sum(v["games"] for v in pz["results"].values())
         conv = sum(v["converted"] for v in pz["results"].values())
         lines.append(f"2. Combo conversion: {stats.rate_line(conv, tot)}")
+        tried = sum(v.get("attempted", 0) for v in pz["results"].values())
+        lines.append(f"   Went for the line in the first round: {stats.rate_line(tried, tot)} "
+                     "(the gap is mostly opponents' counterspells, as at a real table)")
         for k, v in pz["results"].items():
-            lines.append(f"   {k}: {v['converted']}/{v['games']}")
+            lines.append(f"   {k}: won {v['converted']}/{v['games']}, went for it {v.get('attempted', '?')}/{v['games']}")
     else:
         lines.append("2. Combo conversion: not run yet (cedh-sim metrics --run-puzzles)")
     # 3, 4

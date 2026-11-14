@@ -15,13 +15,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
           cache: maven
-      - uses: actions/setup-python@v5
+          cache-dependency-path: forge-patch/FORGE_COMMIT
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Python unit checks

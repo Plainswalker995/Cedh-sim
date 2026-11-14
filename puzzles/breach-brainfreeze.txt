@@ -1,4 +1,5 @@
 # Underworld Breach, Lion's Eye Diamond and Brain Freeze with a stocked graveyard: loop Brain Freeze to mill the table.
+# key: Underworld Breach
 hero hand: Underworld Breach; Lion's Eye Diamond; Brain Freeze
 hero battlefield: Volcanic Island; Volcanic Island; Underground Sea; Island; Island
 hero graveyard: Brainstorm; Ponder; Preordain; Gitaxian Probe; Mental Misstep; Silence; Swords to Plowshares; Pyroblast; Red Elemental Blast; Gamble
