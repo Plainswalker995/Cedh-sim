@@ -82,7 +82,8 @@ Run as `sh cedh-sim <command>` (macOS/Linux), `.\cedh-sim.ps1 <command>` (PowerS
 | `report [RUN]` | Summary, card report, opening hands and loss reasons for a batch (default: latest). |
 | `replay RUN GAME [--step]` | Replay one game from its seed. |
 | `metrics [--run-known] [--run-puzzles]` | The trust scorecard. |
-| `train [--status]` | Retrain the mulligan model; promote it only if it wins more. |
+| `train [--status]` | Retrain the learned models (mulligans and in-game choices); promote only if they win as much or more. |
+| `gather 120` | Play games with extra exploration (and set-up positions) to give the learned choices data on both options. |
 | `log-game "won seat 2 turn 5 by Thassa's Oracle vs Kinnan, Sisay"` | Record a real game of yours as data. |
 | `refresh-pool [--from FOLDER] [--meta FILE]` | Rebuild the opponent pool. |
 | `check` | Check Python, Java and the Forge build. |
@@ -102,6 +103,8 @@ Output lands in `games/run-<time>/`: `games/game-NNN.md` (one per game), `summar
   or Tainted Pact (holding the Consultation for the Oracle's trigger, tutoring for the missing half); the
   Underworld Breach + Lion's Eye Diamond + Brain Freeze loop; plus the combo lines Forge already knows.
 - **Mulligans**: the first mulligan is free, then London. A learned model can decide keeps (below).
+- **Learned choices**: when to go for the win, whether to tutor for protection first, and when to spend a
+  counterspell, taken over by small learned models once they have the data (below).
 - **Natural variation**: new seed and shuffle per game, several lists per commander when the pool has them,
   three play styles (patient, balanced, aggressive) dealt per seat, and a small slip rate.
 - **Round cap**: games that go past it end as draws and count as draws, as at a tournament. Each draw is
@@ -110,12 +113,27 @@ Output lands in `games/run-<time>/`: `games/game-NNN.md` (one per game), `summar
 
 ## The learning layer
 
-Every seat of every game is training data: the kept hand, the number of mulligans, and whether that player
-won. `train` fits a small logistic model of which opening hands win, saves it as `models/vN.properties`,
-then plays it against the version in use on a fixed set of seeds, with only your seat using it, as paired
-games. It becomes `models/current.properties` only if your win rate doesn't drop and the known-answer tests
-pass. History is in `models/history.json`. Today it learns mulligans; the rest of the pilot is search plus
-hand-written cEDH lines.
+Small learned models take over decisions where data beats a hand-written rule. All are logistic models fitted
+with numpy (no GPU), so they train and run the same on Mac, Windows and Linux.
+
+| Decision | What it learns from | Until it has enough data |
+|---|---|---|
+| Mulligan | every kept hand, its size, and whether that player won | Forge's rule plus cEDH hand rules |
+| Go now or wait | each time a winning line is ready: opponents' open mana and hand sizes, own protection, mana, round | go now |
+| Protect first | with the win in hand and a tutor ready: same features | go for the win |
+| Counter or hold | each opponent spell a counterspell could answer: its cost, type, the caster's hand, whether you hold your win | Forge's rule (spells that win are always countered) |
+
+How it learns: every seat of every game is data, and every choice is written to the game's journal with what the
+player could see at the time. To learn what the other option is worth, pilots sometimes take it on purpose
+(`--explore`: 5% in `auto`, 20% in `gather`, 0 in `run` and `swap` so your comparisons stay clean). A choice is
+learned only once both options have enough examples; set-up positions count as data for the go and protect
+choices. `train` fits every model, saves them together as `models/vN.properties`, and plays them against the
+version in use on fixed seeds, as paired games with only your seat using them. The new version replaces
+`models/current.properties` only if your win rate doesn't drop and the known-answer tests pass. History is in
+`models/history.json`.
+
+Real data: your logged games (`log-game`) and public tournament results don't record in-game choices, so they
+calibrate the scorecard (meta share, draw rate, win turns) rather than train these models.
 
 ## The trust scorecard
 
@@ -136,8 +154,12 @@ hand-written cEDH lines.
   same opponents), not as a prediction of your tournament win rate.
 - Small samples mislead. Every rate comes with its 95% range; a 4-point difference needs a few hundred
   paired games to show.
-- Games run long: in early batches far more games hit the round cap as draws than at real events (roughly 1
-  in 5). The scorecard tracks this against real numbers; read win rates with that in mind.
+- Games still run longer than real ones: in the latest batch about 4 in 10 games reached the round cap, against
+  about 1 in 5 at real events. Almost all of those are now natural stalls (stax, counterspell wars) rather than
+  AI mistakes, which means the pilots play a little fairer and slower than real cEDH players. Read win rates
+  with that in mind.
+- Paired games are not perfectly identical: the search makes slightly different choices when a card changes,
+  so a swap test needs more games than a fully deterministic engine would.
 - Speed depends on the machine: roughly 20 games an hour per parallel job with search on (about 60 an hour
   on four cores).
 - The opponent pool is only as good as the lists you put in it.

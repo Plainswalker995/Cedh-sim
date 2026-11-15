@@ -25,6 +25,8 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+      - name: Python packages
+        run: python -m pip install -r requirements.txt
       - name: Python unit checks
         run: python -m unittest discover -s tests -v
       - name: Build patched Forge (macOS, Linux)

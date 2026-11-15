@@ -6,7 +6,7 @@
 3. Meta match: sim results by commander against real tournament data; win turn, draws, win types.
 4. Seat effect: how much going first helps, against real events.
 5. Games to a verdict: how many paired games a swap test needs for a few points of win rate.
-6. Speed: games per hour. Plus Claude usage per batch (an estimate).
+6. Speed: games per hour.
 """
 from __future__ import annotations
 
@@ -265,6 +265,4 @@ def scorecard(run_known: bool = False, run_puzzles: bool = False, games: int = 2
         lines.append(f"6. Speed: {sp['games_per_hour']:.0f} games per hour ({sp['games']} games in {sp['hours']:.1f} h, {sp['run']})")
     else:
         lines.append("6. Speed: no finished run yet")
-    lines.append("   Claude usage: games run as plain code with no Claude in the loop; reading one batch summary "
-                 "and writing the summary Doc is roughly 5-10k tokens per batch (estimate).")
     return "\n".join(lines)
