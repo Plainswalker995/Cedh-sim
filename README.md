@@ -143,8 +143,8 @@ calibrate the scorecard (meta share, draw rate, win turns) rather than train the
    Pact, Underworld Breach, Lion's Eye Diamond, Brain Freeze) for Islands must test worse; swapping an Island for
    a Snow-Covered Island must test the same. Needs a deck with those cards.
 2. **Combo conversion**: set-up positions (`puzzles/`) where a win is on the table: how often the pilot takes it.
-3. **Meta match**: sim win rate by commander against its real meta share, average win turn, draw rate, how
-   games end.
+3. **Meta match** over the newest 400 or so ordinary games (so it reflects the current pilot): sim win rate by
+   commander against its real meta share, average win turn, draw rate, how games end.
 4. **Seat effect** against real events, when you supply reference numbers in `data/real-reference.json`.
 5. **Games to a verdict** for a swap test.
 6. **Speed** in games per hour.
@@ -156,10 +156,12 @@ calibrate the scorecard (meta share, draw rate, win turns) rather than train the
   same opponents), not as a prediction of your tournament win rate.
 - Small samples mislead. Every rate comes with its 95% range; a 4-point difference needs a few hundred
   paired games to show.
-- Games still run longer than real ones: in the latest batch about 4 in 10 games reached the round cap, against
-  about 1 in 5 at real events. Almost all of those are now natural stalls (stax, counterspell wars) rather than
-  AI mistakes, which means the pilots play a little fairer and slower than real cEDH players. Read win rates
-  with that in mind.
+- Games still run longer than real ones: over the latest 400 games about 46 in 100 reached the round cap,
+  against about 1 in 5 at real events. Most of those are natural stalls (stax, counterspell wars), which means the
+  pilots play a little fairer and slower than real cEDH players. Read win rates with that in mind.
+- The pilot was taught the Thassa's Oracle lines and the Underworld Breach loop. Other decks' own combos (Kinnan,
+  Sisay, Kenrith and the like) are played with Forge's general AI, so those pilots sometimes end a game holding
+  pieces they could have used; that shows up as an AI-mistake draw in the scorecard (about 1 game in 7).
 - Paired games are not perfectly identical: the search makes slightly different choices when a card changes,
   so a swap test needs more games than a fully deterministic engine would.
 - Speed depends on the machine: roughly 20 games an hour per parallel job with search on (about 60 an hour

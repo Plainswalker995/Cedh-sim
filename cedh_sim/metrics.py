@@ -98,10 +98,20 @@ def attempted(r: dict, key: str) -> bool:
     return converted(r)
 
 
-def _all_records(kind_filter=("run",)) -> list[dict]:
+RECENT_GAMES = 400
+
+
+def _all_records(limit: int = RECENT_GAMES) -> list[dict]:
+    """The newest ordinary games (batches, automatic batches and learned-model tests; not the data-gathering
+    batches, puzzles or known-answer tests), up to about `limit`, so the scorecard reflects the current pilot."""
+    dirs = [d for pat in ("run-*", "auto-*", "train-eval-*/*") for d in RUNS.glob(pat)
+            if (d / "results.jsonl").exists()]
+    dirs.sort(key=lambda d: (d / "results.jsonl").stat().st_mtime, reverse=True)
     recs = []
-    for d in sorted(RUNS.glob("run-*")):
-        recs += engine.load_results(d)
+    for d in dirs:
+        if len(recs) >= limit:
+            break
+        recs += [r for r in engine.load_results(d) if not r.get("error") and not r.get("timed_out")]
     return recs
 
 
@@ -222,7 +232,7 @@ def scorecard(run_known: bool = False, run_puzzles: bool = False, games: int = 2
     recs = _all_records()
     mm = meta_match(recs)
     rho = mm["rank_correlation_vs_meta_share"]
-    lines.append(f"3. Meta match ({len(recs)} sim games):")
+    lines.append(f"3. Meta match ({len(recs)} most recent sim games):")
     lines.append(f"   Rank correlation, sim win rate vs real meta share: "
                  f"{'n/a (need 5+ games per commander)' if rho is None else f'{rho:+.2f}'} over {mm['commanders_compared']} commanders"
                  " (meta share stands in for strength until real win rates are gathered)")

@@ -93,14 +93,21 @@ def run_batch(hero: Path, pool: Path, n: int, seed: int, out: Path, jobs: int | 
         shutil.rmtree(wdir, ignore_errors=True)
     if not opts.get("_retry"):
         # a worker that dies (out of memory in one long game, say) takes the rest of its slice with it:
-        # play the missing games once more, each slice in a fresh worker with more memory
+        # play the missing games once more, one game per fresh worker with more memory, so a game that
+        # runs out of memory again loses only itself
         done = {r["game"] for r in load_results(out)}
         missing = [g for g in range(start, start + n) if g not in done]
         for s0, cnt in _ranges(missing):
             if not quiet:
                 print(f"replaying games {s0}-{s0 + cnt - 1} after a worker stopped early", flush=True)
-            run_batch(hero, pool, cnt, seed, out, jobs=min(jobs, cnt), start=s0,
-                      opts={**opts, "_retry": True, "mem": "3g"}, quiet=quiet)
+            for c0 in range(s0, s0 + cnt, jobs):
+                k = min(jobs, s0 + cnt - c0)
+                run_batch(hero, pool, k, seed, out, jobs=k, start=c0,
+                          opts={**opts, "_retry": True, "mem": "3g"}, quiet=quiet)
+        lost = [g for g in missing if g not in {r["game"] for r in load_results(out)}]
+        if lost and not quiet:
+            print(f"{len(lost)} game(s) could not be played (out of memory twice): {', '.join(map(str, lost))}",
+                  flush=True)
     return load_results(out)
 
 

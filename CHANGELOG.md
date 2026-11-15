@@ -48,8 +48,11 @@
 - `metrics --run-known --known NAME` reruns one known-answer test; a flaky read of a shared folder no longer
   stops a batch.
 - Fix: when a worker stops early (out of memory in one very long game), the games it had left are played again
-  in a fresh worker with more memory instead of silently missing from the batch.
+  in fresh workers with more memory, one game each, instead of silently missing from the batch; a game that
+  runs out of memory twice is named in the output.
 - A decision model is only used when it predicts held-out games better than no model at all; until then the
   hand-written rule keeps deciding.
 - Setup: the README's install lines now include numpy for each system, the clone address is filled in, and
   `check` says whether numpy is installed.
+- The scorecard's meta match and seat effect use the newest 400 or so ordinary games (batches, automatic batches
+  and learned-model tests), so they reflect the current pilot instead of every version since the first.
