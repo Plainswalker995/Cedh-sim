@@ -84,6 +84,10 @@ def fit(kind: str, rows: list[dict]) -> dict:
     held = log_loss(X[te], y[te], b, w)
     p0 = float(np.clip(y[tr].mean(), 1e-3, 1 - 1e-3))
     base = log_loss(X[te], y[te], float(np.log(p0 / (1 - p0))), np.zeros_like(w))
+    if held >= base:
+        return {"ok": False, "kind": kind, "examples": len(rows), "option1": ones,
+                "reason": f"a model from {len(rows)} examples did not predict held-out games better than no model "
+                          f"(log loss {held:.4f} vs {base:.4f}); more data needed"}
     b, w = fit_logistic(X, y, l2=4.0)
     k = len(names)
     model = {"ok": True, "kind": kind, "examples": len(rows), "option1": ones, "names": names, "bias": float(b),

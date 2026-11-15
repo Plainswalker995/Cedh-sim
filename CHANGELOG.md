@@ -47,3 +47,5 @@
   go-or-wait and protect-first choices, since a win is on the table every game there.
 - `metrics --run-known --known NAME` reruns one known-answer test; a flaky read of a shared folder no longer
   stops a batch.
+- Fix: when a worker stops early (out of memory in one very long game), the games it had left are played again
+  in a fresh worker with more memory instead of silently missing from the batch.

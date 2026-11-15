@@ -91,7 +91,28 @@ def run_batch(hero: Path, pool: Path, n: int, seed: int, out: Path, jobs: int | 
     for _, wdir, log in procs:
         log.close()
         shutil.rmtree(wdir, ignore_errors=True)
+    if not opts.get("_retry"):
+        # a worker that dies (out of memory in one long game, say) takes the rest of its slice with it:
+        # play the missing games once more, each slice in a fresh worker with more memory
+        done = {r["game"] for r in load_results(out)}
+        missing = [g for g in range(start, start + n) if g not in done]
+        for s0, cnt in _ranges(missing):
+            if not quiet:
+                print(f"replaying games {s0}-{s0 + cnt - 1} after a worker stopped early", flush=True)
+            run_batch(hero, pool, cnt, seed, out, jobs=min(jobs, cnt), start=s0,
+                      opts={**opts, "_retry": True, "mem": "3g"}, quiet=quiet)
     return load_results(out)
+
+
+def _ranges(games: list[int]) -> list[tuple[int, int]]:
+    """Consecutive game numbers as (first, count) runs."""
+    out = []
+    for g in sorted(games):
+        if out and out[-1][0] + out[-1][1] == g:
+            out[-1] = (out[-1][0], out[-1][1] + 1)
+        else:
+            out.append((g, 1))
+    return out
 
 
 def _collect(procs, out: Path, seen: set, results_path: Path, quiet: bool) -> None:

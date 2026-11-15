@@ -43,3 +43,10 @@ class DrawCauseTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RangesTest(unittest.TestCase):
+    def test_missing_games_group_into_runs(self):
+        from cedh_sim.engine import _ranges
+        self.assertEqual(_ranges([45, 31, 32, 33, 40, 41]), [(31, 3), (40, 2), (45, 1)])
+        self.assertEqual(_ranges([]), [])
