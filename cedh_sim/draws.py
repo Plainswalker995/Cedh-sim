@@ -31,12 +31,15 @@ LOCKS = {"Drannith Magistrate", "Rule of Law", "Deafening Silence", "Archon of E
          "Lavinia, Azorius Renegade", "Grafdigger's Cage", "Opposition", "Static Orb", "Gaddock Teeg",
          "Ethersworn Canonist", "Silence"}
 RITUALS = {"Dark Ritual", "Cabal Ritual", "Culling the Weak", "Rite of Flame", "Simian Spirit Guide",
-           "Elvish Spirit Guide", "Lotus Petal", "Mox Diamond", "Chrome Mox"}
+           "Elvish Spirit Guide", "Lotus Petal", "Mox Diamond", "Chrome Mox", "Infernal Plunge", "Sacrifice",
+           "Songs of the Damned", "Seething Song", "Jeska's Will"}
 # held on purpose: combo pieces waiting for their partner, and answers that are cast on someone else's turn
 HELD_ON_PURPOSE = {"Brain Freeze", "Lion's Eye Diamond", "Demonic Consultation", "Tainted Pact", "Thassa's Oracle",
                    "Underworld Breach", "Mindbreak Trap", "Misdirection", "Redirect Lightning", "Deflecting Swat",
                    "Pact of Negation", "Silence", "Orim's Chant", "Borne Upon a Wind", "Veil of Summer",
-                   "Deadly Rollick", "Snapback", "Gitaxian Probe", "Mental Misstep"}
+                   "Deadly Rollick", "Snapback", "Gitaxian Probe", "Mental Misstep",
+                   # answers to someone else's spell, and a win-turn card
+                   "Commandeer", "Flare of Duplication", "Reiterate", "Return the Favor", "Reverberate", "Fork", "Final Fortune", "Twinflame", "Heat Shimmer"}
 PROACTIVE_HELD = 3
 MANA_IN_PLAY = 5
 

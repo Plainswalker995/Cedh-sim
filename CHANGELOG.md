@@ -32,3 +32,8 @@
 - Fix: seats are now recorded in true turn order (Forge picks who goes first). `tools/fix_seats.py` repairs
   batches played before the fix from their play-by-play.
 - Windows, macOS and Linux launchers and setup scripts; CI build and smoke test on all three.
+- With nothing to deploy, a pilot casts a tutor or draw spell in its second main phase instead of holding it
+  (a wheel only when the rest of its hand is small and holds no combo piece). Diabolic Intent can fetch a
+  Thassa's Oracle half.
+- Draw causes no longer count reactive cards (Commandeer, Flare of Duplication) or sacrifice rituals held in
+  hand as mistakes.

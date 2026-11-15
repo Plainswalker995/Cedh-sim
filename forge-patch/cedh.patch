@@ -142,10 +142,10 @@ index a7d795ed..916947b6 100644
              for (final Player o : ai.getOpponents()) {
 diff --git a/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java b/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java
 new file mode 100644
-index 00000000..6800e2b6
+index 00000000..a42f4dc1
 --- /dev/null
 +++ b/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java
-@@ -0,0 +1,586 @@
+@@ -0,0 +1,649 @@
 +package forge.ai.simulation;
 +
 +import java.util.ArrayList;
@@ -282,10 +282,73 @@ index 00000000..6800e2b6
 +                best = sa;
 +            }
 +        }
++        if (best == null) {
++            best = digSpell(ai, candidates);
++        }
 +        if (best != null) {
 +            note(game, "PLAN " + ai.getName() + " uses open mana: " + best.getHostCard().getName());
 +        }
 +        return best;
++    }
++
++    /**
++     * With nothing to deploy, a tutor or draw spell rather than ending the turn holding it. A wheel only when the
++     * rest of the hand is small and holds no combo piece, since it throws the hand away.
++     */
++    static SpellAbility digSpell(final Player ai, final List<SpellAbility> candidates) {
++        SpellAbility best = null;
++        for (final SpellAbility sa : candidates) {
++            final Card host = sa == null ? null : sa.getHostCard();
++            if (host == null || !sa.isSpell() || !host.isInZone(ZoneType.Hand) || host.isPermanent()
++                    || host.getCMC() < 1 || LOOP_PIECES.contains(host.getName()) || !digs(sa)) {
++                continue;
++            }
++            if (WHEELS.contains(host.getName()) && !wheelOk(ai, host)) {
++                continue;
++            }
++            if (!playable(ai, sa)) {
++                continue;
++            }
++            if (best == null || host.getCMC() > best.getHostCard().getCMC()) {
++                best = sa;
++            }
++        }
++        return best;
++    }
++
++    static final java.util.Set<String> WHEELS = new java.util.HashSet<>(java.util.Arrays.asList(
++            "Wheel of Fortune", "Echo of Eons", "Timetwister", "Windfall", "Winds of Change", "Reforge the Soul",
++            "Magus of the Wheel", "Commit // Memory", "Day's Undoing"));
++
++    private static boolean wheelOk(final Player ai, final Card wheel) {
++        int rest = 0;
++        for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
++            if (c.equals(wheel) || c.isLand()) {
++                continue;
++            }
++            if (LOOP_PIECES.contains(c.getName()) || WINNERS.contains(c.getName())) {
++                return false;
++            }
++            rest++;
++        }
++        return rest <= 2;
++    }
++
++    /** A tutor (library to hand or top) or a draw spell. */
++    private static boolean digs(final SpellAbility sa) {
++        if (WHEELS.contains(sa.getHostCard().getName())) {
++            return true;
++        }
++        final forge.game.ability.ApiType api = sa.getApi();
++        if (api == forge.game.ability.ApiType.Draw) {
++            return true;
++        }
++        if (api == forge.game.ability.ApiType.ChangeZone) {
++            final String from = sa.getParamOrDefault("Origin", "");
++            final String to = sa.getParamOrDefault("Destination", "");
++            return from.contains("Library") && ("Hand".equals(to) || "Library".equals(to));
++        }
++        return false;
 +    }
 +
 +    /** Cheap card-draw engines cEDH decks deploy early: the cards that win the long game. */
@@ -389,7 +452,7 @@ index 00000000..6800e2b6
 +    }
 +
 +    static final java.util.Set<String> HAND_TUTORS = new java.util.HashSet<>(java.util.Arrays.asList(
-+            "Demonic Tutor", "Grim Tutor", "Diabolic Tutor", "Beseech the Mirror"));
++            "Demonic Tutor", "Grim Tutor", "Diabolic Tutor", "Beseech the Mirror", "Diabolic Intent", "Gamble"));
 +    static final java.util.Set<String> WINNERS = new java.util.HashSet<>(java.util.Arrays.asList(
 +            ORACLE, "Laboratory Maniac", "Jace, Wielder of Mysteries"));
 +    static final java.util.Set<String> EMPTIERS = new java.util.HashSet<>(java.util.Arrays.asList(
