@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 1.0.0 (2026-11-15)
+
+First public release.
 
 - Four-player Commander games on the Forge engine, headless, in parallel batches, with random seats and a
   fresh seed per game (kept for replays).

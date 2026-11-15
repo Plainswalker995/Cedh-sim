@@ -433,6 +433,8 @@ def cmd_train(a) -> None:
 
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="cedh-sim", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    from . import __version__
+    ap.add_argument("--version", action="version", version=f"cedh-sim {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     def common(p):
