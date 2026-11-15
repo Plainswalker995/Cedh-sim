@@ -29,16 +29,16 @@ script downloads Forge's source at a fixed commit, applies this project's patch 
 **macOS** (with [Homebrew](https://brew.sh)):
 
 ```sh
-brew install python git openjdk@21 maven
-git clone <this repo> cedh-sim && cd cedh-sim
+brew install python git openjdk@21 maven numpy
+git clone https://github.com/Plainswalker995/Cedh-sim.git cedh-sim && cd cedh-sim
 bash scripts/setup.sh
 ```
 
 **Linux** (Debian/Ubuntu):
 
 ```sh
-sudo apt install python3 git openjdk-21-jdk maven
-git clone <this repo> cedh-sim && cd cedh-sim
+sudo apt install python3 python3-numpy git openjdk-21-jdk maven
+git clone https://github.com/Plainswalker995/Cedh-sim.git cedh-sim && cd cedh-sim
 bash scripts/setup.sh
 ```
 
@@ -46,11 +46,13 @@ bash scripts/setup.sh
 
 ```powershell
 winget install Python.Python.3.12 Git.Git EclipseAdoptium.Temurin.21.JDK Apache.Maven
-git clone <this repo> cedh-sim; cd cedh-sim
+git clone https://github.com/Plainswalker995/Cedh-sim.git cedh-sim; cd cedh-sim
+py -m pip install -r requirements.txt
 .\scripts\setup.ps1
 ```
 
-For the learning layer, also `pip install -r requirements.txt` (numpy). `cedh-sim check` confirms the setup.
+numpy is used by the learning layer (`auto`, `train`, `gather`); on other systems `python3 -m pip install -r requirements.txt`
+installs it. `cedh-sim check` confirms the setup.
 
 ## Your deck and the opponent pool
 

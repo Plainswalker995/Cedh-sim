@@ -33,6 +33,8 @@ def make_patch(forge: Path) -> None:
 
 
 def export(repo: Path) -> None:
+    if repo.resolve() == ROOT:
+        sys.exit("Run this copy of export_repo.py from the working folder, not from the repo it writes to.")
     for name in PUBLISH:
         src = ROOT / name
         if not src.exists():

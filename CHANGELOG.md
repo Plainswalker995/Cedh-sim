@@ -49,3 +49,7 @@
   stops a batch.
 - Fix: when a worker stops early (out of memory in one very long game), the games it had left are played again
   in a fresh worker with more memory instead of silently missing from the batch.
+- A decision model is only used when it predicts held-out games better than no model at all; until then the
+  hand-written rule keeps deciding.
+- Setup: the README's install lines now include numpy for each system, the clone address is filled in, and
+  `check` says whether numpy is installed.

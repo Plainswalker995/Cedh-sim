@@ -403,6 +403,11 @@ def cmd_check(a) -> None:
     import shutil
     print(f"Python {sys.version.split()[0]}")
     print("Java: " + ("found" if shutil.which("java") else "MISSING (install a JDK 17 or newer)"))
+    try:
+        import numpy
+        print(f"numpy {numpy.__version__} (learning layer ready)")
+    except ImportError:
+        print("numpy: MISSING (only needed for auto, train and gather; see the README's Setup)")
     err = engine.check_engine()
     print("Forge engine: " + (err or f"built ({engine.JAR.name})"))
     if not err:
