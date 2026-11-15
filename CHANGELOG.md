@@ -37,3 +37,13 @@
   Thassa's Oracle half.
 - Draw causes no longer count reactive cards (Commandeer, Flare of Duplication) or sacrifice rituals held in
   hand as mistakes.
+- Learned in-game decisions (design choice): every pilot logs three choices with what it could see at the time
+  (opponents' open mana and hand sizes, its own protection, mana and the round): cast the winning line now or wait
+  a turn, tutor for protection before going off, and counter an opponent's spell or keep the counterspell. Spells
+  that win are always countered. `train` fits a small logistic model per choice (numpy, no GPU) once there are
+  enough examples of both options, and the promotion gate decides whether it replaces the hand-written rule.
+- Exploration (design choice): to learn, a pilot sometimes takes the other option on purpose (`--explore`; 5% in
+  `auto`, 0 in `run` and `swap`, 20% in the new `gather` command). Set-up positions count as data for the
+  go-or-wait and protect-first choices, since a win is on the table every game there.
+- `metrics --run-known --known NAME` reruns one known-answer test; a flaky read of a shared folder no longer
+  stops a batch.

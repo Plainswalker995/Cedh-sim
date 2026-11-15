@@ -87,7 +87,11 @@ def ensure_pool(opponents: str | None) -> Path:
 
 
 def run_opts(a) -> dict:
-    return {"rounds": a.rounds, "slip": 0.0 if a.pure else a.slip, "nostyles": a.pure, "mc": a.mc}
+    # exploration: how often a learned decision takes the other option, to keep gathering data on both.
+    # Default: a little in hands-off batches (auto), none in run and swap tests, where results should be clean.
+    explore = a.explore if getattr(a, "explore", None) is not None else (0.05 if a.cmd == "auto" else 0.0)
+    return {"rounds": a.rounds, "slip": 0.0 if a.pure else a.slip, "nostyles": a.pure, "mc": a.mc,
+            "explore": 0.0 if a.pure else explore}
 
 
 def cmd_run(a) -> None:
@@ -169,6 +173,31 @@ def cmd_auto(a) -> None:
         print(f"\nLearning: {hands - state['hands_at_last_train']} new hands since the last retrain "
               f"(retrains at {a.retrain_every}).")
     print(f"Doc text: {out / 'doc.md'}")
+
+
+def cmd_gather(a) -> None:
+    """Training data for the learned decisions: a batch with more exploration, plus set-up positions (puzzles),
+    where a win is on the table every game, for the go-now-or-wait and protect-first choices."""
+    from . import decide, metrics
+    err = engine.check_engine()
+    if err:
+        raise SystemExit(err)
+    explore = a.explore if a.explore is not None else 0.2
+    hero = prepare_deck(a.deck)
+    pdir = ensure_pool(a.opponents)
+    stamp = _now()
+    if a.games:
+        opts = {**run_opts(a), "explore": explore}
+        engine.run_batch(hero, pdir, a.games, random.randrange(1, 10**9), RUNS / f"gather-{stamp}", jobs=a.jobs,
+                         opts=opts, quiet=True)
+    for pz in sorted(metrics.PUZZLES.glob("*.txt")) if a.puzzles else []:
+        opts = {"rounds": 3, "slip": 0.0, "nostyles": True, "mc": a.mc, "scenario": pz, "explore": max(explore, 0.3)}
+        engine.run_batch(hero, pdir, a.puzzles, random.randrange(1, 10**9), RUNS / f"puzzle-data-{pz.stem}-{stamp}",
+                         jobs=a.jobs, opts=opts, quiet=True)
+    ex = decide.examples(decide.decision_runs())
+    print("Decision data on hand: " + ", ".join(
+        f"{k} {len(ex.get(k, []))} ({sum(e['choice'] for e in ex.get(k, []))} of option 1)" for k in decide.KINDS))
+    print("Next: cedh-sim train")
 
 
 def draw_causes(out: Path, recs: list[dict]) -> str:
@@ -385,7 +414,8 @@ def cmd_check(a) -> None:
 
 def cmd_metrics(a) -> None:
     from . import metrics
-    print(metrics.scorecard(run_known=a.run_known, run_puzzles=a.run_puzzles, games=a.games, jobs=a.jobs))
+    print(metrics.scorecard(run_known=a.run_known, run_puzzles=a.run_puzzles, games=a.games, jobs=a.jobs,
+                            only=a.known))
 
 
 def cmd_train(a) -> None:
@@ -409,6 +439,8 @@ def main(argv=None) -> None:
         p.add_argument("--slip", type=float, default=0.03, help="human-like slip rate (default 0.03)")
         p.add_argument("--pure", action="store_true", help="pure-strength test: no slips, same balanced style at every seat")
         p.add_argument("--mc", default="on", choices=["on", "off", "max"], help="search strength (default on)")
+        p.add_argument("--explore", type=float, help="how often a learned in-game decision tries the other option, "
+                       "to gather training data (default 0.05 in auto, 0 otherwise; 0.15 is good for a data batch)")
         p.add_argument("--quiet", action="store_true")
 
     p = sub.add_parser("run", help="play a batch")
@@ -430,6 +462,12 @@ def main(argv=None) -> None:
     p.add_argument("--retrain-every", type=int, default=800, help="new opening hands between retrains (default 800)")
     common(p)
     p.set_defaults(func=cmd_auto)
+
+    p = sub.add_parser("gather", help="play games with extra exploration to train the learned decisions")
+    p.add_argument("games", type=int, nargs="?", default=120)
+    p.add_argument("--puzzles", type=int, default=30, help="games per set-up position (default 30; 0 for none)")
+    common(p)
+    p.set_defaults(func=cmd_gather)
 
     p = sub.add_parser("report")
     p.add_argument("run", nargs="?")
@@ -461,6 +499,7 @@ def main(argv=None) -> None:
 
     p = sub.add_parser("metrics")
     p.add_argument("--run-known", action="store_true", help="also run the known-answer swap tests (slow)")
+    p.add_argument("--known", default=None, help="with --run-known: run only this test (e.g. island-for-snow-island)")
     p.add_argument("--run-puzzles", action="store_true", help="also run the combo puzzles")
     p.add_argument("--games", type=int, default=200)
     p.add_argument("--jobs", type=int)

@@ -43,10 +43,12 @@ def _load(name: str):
     return json.loads(p.read_text()) if p.exists() else None
 
 
-def run_known(games: int = 200, jobs: int | None = None) -> list[dict]:
+def run_known(games: int = 200, jobs: int | None = None, only: str | None = None) -> list[dict]:
     from .cli import DEFAULT_DECK, ensure_pool, paired_swap, swap_deck
     out = []
     for name, oc, ic, expect in KNOWN:
+        if only and name != only:
+            continue
         variant = swap_deck(DEFAULT_DECK, oc, ic)
         d = RUNS / f"known-{name}-{dt.datetime.now():%Y%m%d-%H%M%S}"
         opts = {"rounds": 10, "slip": 0.0, "nostyles": True, "mc": "on"}
@@ -183,12 +185,13 @@ def real_reference() -> dict:
     return json.loads(p.read_text()) if p.exists() else {}
 
 
-def scorecard(run_known: bool = False, run_puzzles: bool = False, games: int = 200, jobs: int | None = None) -> str:
+def scorecard(run_known: bool = False, run_puzzles: bool = False, games: int = 200, jobs: int | None = None,
+              only: str | None = None) -> str:
     if run_puzzles:
         run_puzzles_fn = globals()["run_puzzles"]
         run_puzzles_fn(jobs=jobs)
     if run_known:
-        globals()["run_known"](games=games, jobs=jobs)
+        globals()["run_known"](games=games, jobs=jobs, only=only)
     ref = real_reference()
     lines = ["cEDH sim trust scorecard", ""]
     # 1

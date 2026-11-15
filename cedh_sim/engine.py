@@ -41,6 +41,8 @@ def java_cmd(hero: Path, pool: Path, n: int, seed: int, start: int, out: Path, o
            "-rounds", str(opts.get("rounds", 10)), "-slip", str(opts.get("slip", 0.03))]
     if opts.get("nostyles"):
         cmd.append("-nostyles")
+    if opts.get("explore"):
+        cmd += ["-explore", str(opts["explore"])]
     model = opts.get("model", "current")
     if model:
         mp = Path(model) if Path(model).suffix else ROOT / "models" / f"{model}.properties"
@@ -98,7 +100,11 @@ def _collect(procs, out: Path, seen: set, results_path: Path, quiet: bool) -> No
         rj = wdir / "results.jsonl"
         if not rj.exists():
             continue
-        for line in rj.read_text(encoding="utf-8").splitlines():
+        try:
+            text = rj.read_text(encoding="utf-8")
+        except OSError:  # a shared or network folder can fail a read now and then: try again on the next pass
+            continue
+        for line in text.splitlines():
             try:
                 rec = json.loads(line)
             except json.JSONDecodeError:
@@ -109,8 +115,12 @@ def _collect(procs, out: Path, seen: set, results_path: Path, quiet: bool) -> No
             src = wdir / rec["file"] if rec.get("file") else None
             if src and src.exists():
                 dst = out / "games" / src.name
-                shutil.copyfile(src, dst)
-                rec["file"] = f"games/{src.name}"
+                try:
+                    shutil.copyfile(src, dst)
+                    rec["file"] = f"games/{src.name}"
+                except OSError:
+                    seen.discard(rec["game"])
+                    continue
             with open(results_path, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(rec) + "\n")
             if not quiet:

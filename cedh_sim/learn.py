@@ -210,9 +210,11 @@ def train(min_examples: int = 400) -> dict:
         for role in rs:
             if role != "land":
                 by_role.setdefault(role, set()).add(n.split(" // ")[0])
+    from . import decide
     return {"ok": True, "examples": len(rows), "bias": b, "w": dict(zip(FEATURES, map(float, w))),
             "expect": expect, "cards": {k: sorted(v) for k, v in by_role.items()},
-            "held_out_log_loss": held, "baseline_log_loss": base}
+            "held_out_log_loss": held, "baseline_log_loss": base,
+            "decisions": decide.train_all()}
 
 
 def write_properties(model: dict, path: Path, version: str) -> None:
@@ -224,6 +226,8 @@ def write_properties(model: dict, path: Path, version: str) -> None:
     for role in ("fast", "tutor", "interaction", "combo", "draw"):
         cards = [c.replace("\\", "") for c in model["cards"].get(role, [])]
         lines.append(f"cards.{role}=" + "|".join(cards))
+    from . import decide
+    lines += decide.properties_lines(model.get("decisions") or {})
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -276,6 +280,8 @@ def train_and_maybe_promote(games: int = 120, jobs: int | None = None, force: bo
              f"(held-out log loss {model['held_out_log_loss']:.4f} vs {model['baseline_log_loss']:.4f} for no model; lower is better)."]
     top = sorted(model["w"].items(), key=lambda kv: -abs(kv[1]))[:4]
     lines.append("Strongest signals per card in hand: " + ", ".join(f"{k} {v:+.2f}" for k, v in top))
+    from . import decide
+    lines += ["In-game decisions:"] + ["  " + x for x in decide.summary(model.get("decisions") or {})]
     known = [metrics._load(f"known-{k[0]}") for k in metrics.KNOWN]
     known_ok = all(known) and all(k["pass"] for k in known)
     ev = evaluate(path, current if current.exists() else None, games, jobs, DEFAULT_DECK, ensure_pool(None))
@@ -294,6 +300,9 @@ def train_and_maybe_promote(games: int = 120, jobs: int | None = None, force: bo
     h = history()
     h.append({"version": ver, "date": dt.datetime.now().isoformat(timespec="seconds"), "examples": model["examples"],
               "held_out_log_loss": model["held_out_log_loss"], "baseline_log_loss": model["baseline_log_loss"],
+              "decisions": {k: {kk: v.get(kk) for kk in ("ok", "examples", "held_out_log_loss", "baseline_log_loss",
+                                                          "policy_option1")} for k, v in
+                            (model.get("decisions") or {}).items()},
               "eval": ev, "known_ok": known_ok, "promoted": bool(promote)})
     _save_history(h)
     return "\n".join(lines)
@@ -304,7 +313,10 @@ def status() -> str:
     cur = MODELS / "current.properties"
     head = cur.read_text().splitlines()[0] if cur.exists() else "No learned model in use yet (Forge's own mulligan rule)."
     rows = examples()
-    lines = [head, f"Training data on hand: {len(rows)} opening hands from {len(training_runs())} batches."]
+    from . import decide
+    ex = decide.examples(decide.decision_runs())
+    lines = [head, f"Training data on hand: {len(rows)} opening hands from {len(training_runs())} batches; "
+             + ", ".join(f"{len(ex.get(k, []))} {k} decisions" for k in decide.KINDS) + "."]
     for e in h[-5:]:
         lines.append(f"{e['version']} ({e['date'][:10]}): {e['examples']} hands, change "
                      f"{e['eval']['diff']*100:+.1f} points over {e['eval']['pairs']} games, "

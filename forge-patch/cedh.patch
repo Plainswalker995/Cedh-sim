@@ -1,18 +1,19 @@
 diff --git a/forge-ai/src/main/java/forge/ai/AiController.java b/forge-ai/src/main/java/forge/ai/AiController.java
-index dd2a6e13..4f985287 100644
+index dd2a6e13..bd21276d 100644
 --- a/forge-ai/src/main/java/forge/ai/AiController.java
 +++ b/forge-ai/src/main/java/forge/ai/AiController.java
-@@ -2155,6 +2155,9 @@ public class AiController {
+@@ -2155,6 +2155,10 @@ public class AiController {
              final Card h = spellAbility.getHostCard();
              return h != null && ((ComputerUtilCard.isCardRemAIDeck(h) && !flatMc) || ComboAssembly.deadOnArrival(player, spellAbility)
                      || (flatMc && LoopRunner.held(player, spellAbility))
 +                    || (flatMc && ConsultationWin.heldForOracle(player, spellAbility))
 +                    || (flatMc && ConsultationWin.heldWinner(player, spellAbility))
 +                    || (flatMc && forge.ai.simulation.CedhPilot.heldForBreach(player, spellAbility))
++                    || (flatMc && forge.ai.simulation.CedhPilot.waitingOn(player, spellAbility))
                      || (flatMc && SurpriseEntry.isEntryAbility(spellAbility) && !SurpriseEntry.offered(player, spellAbility))
                      || (flatMc && FlatMonteCarloPicker.needlessTrick(player, spellAbility))
                      || (flatMc && SpecialActions.waitsForCombat(player, spellAbility))
-@@ -2171,7 +2174,7 @@ public class AiController {
+@@ -2171,13 +2175,13 @@ public class AiController {
          if (!skipped.isEmpty())
              saList.removeAll(skipped);
  
@@ -21,18 +22,28 @@ index dd2a6e13..4f985287 100644
              final SpellAbility vault = VaultLoop.sureCast(player, saList);
              if (vault != null) {
                  return vault; // Time Vault and what untaps it: an extra turn every turn, no rollouts needed
-@@ -2222,6 +2225,10 @@ public class AiController {
+             }
+             final SpellAbility oracle = ConsultationWin.sureCast(player, saList);
+-            if (oracle != null) {
++            if (oracle != null && forge.ai.simulation.Decisions.goNow(player, "oracle")) {
+                 return oracle; // Thassa's Oracle with Demonic Consultation in hand: cast it, the Consultation answers its trigger
+             }
+             final SpellAbility pileDraw = DoomsdayPile.sureDraw(player, saList);
+@@ -2222,6 +2226,13 @@ public class AiController {
                  return assembly; // a catalogued combo whose other cards are all in play or in hand: put it together
              }
          }
 +        final SpellAbility cedhOpening = forge.ai.simulation.CedhPilot.sureCast(player, saList);
++        if (flatMc) {
++            saList.removeIf(s -> forge.ai.simulation.CedhPilot.waitingOn(player, s)); // waiting a turn with the win
++        }
 +        if (cedhOpening != null && !hasFailedToCast(cedhOpening)) {
 +            return cedhOpening; // cEDH habits: fast mana down, commander out as soon as it can be paid for
 +        }
          if (flatMc && game.getStack().isEmpty()) {
              // Stiflenought: the Dreadnought is cast as soon as its Stifle can be paid for as well, without rollouts
              final SpellAbility sureStifle = StifleCombo.sureCast(player, saList);
-@@ -3636,6 +3643,13 @@ public class AiController {
+@@ -3636,6 +3647,13 @@ public class AiController {
              return simPicker.chooseCardToHiddenOriginChangeZone(destination, origin, sa, fetchList, player2, decider);
          }
  
@@ -123,6 +134,22 @@ index 386fb095..42adfe7e 100644
          // an opponent choosing between cards revealed from outside the game (Extrapolate the Impossible, Wish-like
          // effects with a chooser) hands over the worse one
          if (player.isOpponentOf(decider) && ZoneType.Hand.equals(destination) && origin.contains(ZoneType.Sideboard)) {
+diff --git a/forge-ai/src/main/java/forge/ai/ability/CounterAi.java b/forge-ai/src/main/java/forge/ai/ability/CounterAi.java
+index 8597aaa6..ea99ebd5 100644
+--- a/forge-ai/src/main/java/forge/ai/ability/CounterAi.java
++++ b/forge-ai/src/main/java/forge/ai/ability/CounterAi.java
+@@ -216,6 +216,11 @@ public class CounterAi extends SpellAbilityAi {
+             }
+         }
+ 
++        if (tgtSA != null && forge.ai.simulation.CedhPilot.enabled) {
++            // learned: counter this spell or keep the counterspell (spells that win are always countered)
++            dontCounter = !forge.ai.simulation.Decisions.counter(ai, tgtSA, tgtCMC, !dontCounter);
++        }
++
+         if (dontCounter) {
+             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+         }
 diff --git a/forge-ai/src/main/java/forge/ai/ability/MillAi.java b/forge-ai/src/main/java/forge/ai/ability/MillAi.java
 index a7d795ed..916947b6 100644
 --- a/forge-ai/src/main/java/forge/ai/ability/MillAi.java
@@ -142,10 +169,10 @@ index a7d795ed..916947b6 100644
              for (final Player o : ai.getOpponents()) {
 diff --git a/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java b/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java
 new file mode 100644
-index 00000000..a42f4dc1
+index 00000000..ed08c889
 --- /dev/null
 +++ b/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java
-@@ -0,0 +1,649 @@
+@@ -0,0 +1,700 @@
 +package forge.ai.simulation;
 +
 +import java.util.ArrayList;
@@ -217,8 +244,9 @@ index 00000000..a42f4dc1
 +            return tutor;
 +        }
 +        final SpellAbility breach = breachLine(ai, candidates);
-+        if (breach != null) {
-+            return breach;
++        if (breach != null && (controls(ai, BREACH) && !BREACH.equals(breach.getHostCard().getName())
++                || Decisions.goNow(ai, "breach"))) {
++            return breach; // a loop already running is never stopped half-way
 +        }
 +        SpellAbility rock = null;
 +        SpellAbility engine = null;
@@ -467,6 +495,18 @@ index 00000000..a42f4dc1
 +        return false;
 +    }
 +
++    /** Both halves of the Thassa's Oracle line in hand. */
++    static boolean holdsOracleLine(final Player ai) {
++        return anyIn(ai, WINNERS, ZoneType.Hand) && anyIn(ai, EMPTIERS, ZoneType.Hand);
++    }
++
++    /** During a turn this player chose to wait with its win, its combo pieces stay in hand. */
++    public static boolean waitingOn(final Player ai, final SpellAbility sa) {
++        final Card h = sa == null ? null : sa.getHostCard();
++        return enabled && h != null && h.isInZone(ZoneType.Hand) && Decisions.waiting(ai)
++                && (LOOP_PIECES.contains(h.getName()) || WINNERS.contains(h.getName()));
++    }
++
 +    /** The half of the Oracle line a tutor should find now, or null when it shouldn't: the other half is in hand. */
 +    static String missingOracleHalf(final Player ai) {
 +        final boolean winner = anyIn(ai, WINNERS, ZoneType.Hand);
@@ -486,6 +526,10 @@ index 00000000..a42f4dc1
 +     * mana left to cast both halves this turn.
 +     */
 +    static SpellAbility tutorForOracle(final Player ai, final List<SpellAbility> candidates) {
++        final SpellAbility shield = tutorForShield(ai, candidates);
++        if (shield != null) {
++            return shield;
++        }
 +        String want = missingOracleHalf(ai);
 +        boolean fresh = false;
 +        if (want == null && !anyIn(ai, WINNERS, ZoneType.Hand) && !anyIn(ai, EMPTIERS, ZoneType.Hand)
@@ -522,6 +566,40 @@ index 00000000..a42f4dc1
 +                        + (fresh ? " to start the Thassa's Oracle line" : " to win with Thassa's Oracle"));
 +                return sa;
 +            }
++        }
++        return null;
++    }
++
++    /**
++     * With both halves of the Oracle line in hand and a tutor that finds any card: fetch protection first, when the
++     * learned model says so (the default is to go for the win).
++     */
++    static SpellAbility tutorForShield(final Player ai, final List<SpellAbility> candidates) {
++        if (!holdsOracleLine(ai) || ai.cantWin() || ai.getCardsIn(ZoneType.Library).size() <= 7) {
++            return null;
++        }
++        final String prot = Decisions.protectionInLibrary(ai);
++        if (prot == null) {
++            return null;
++        }
++        final int mana = forge.ai.ComputerUtilMana.getAvailableManaEstimate(ai);
++        for (final SpellAbility sa : candidates) {
++            final Card host = sa == null ? null : sa.getHostCard();
++            if (host == null || !sa.isSpell() || !host.isInZone(ZoneType.Hand)) {
++                continue;
++            }
++            final String name = host.getName();
++            final boolean any = HAND_TUTORS.contains(name) && !"Diabolic Intent".equals(name)
++                    || "Vampiric Tutor".equals(name) || "Imperial Seal".equals(name);
++            if (!any || mana < host.getCMC() || !playable(ai, sa)) {
++                continue;
++            }
++            if (!Decisions.shieldFirst(ai)) {
++                return null;
++            }
++            TUTOR_WANT.put(ai, prot);
++            note(ai.getGame(), "PLAN " + ai.getName() + " casts " + name + " for " + prot + " to protect the win");
++            return sa;
 +        }
 +        return null;
 +    }
@@ -892,6 +970,220 @@ index e5121b91..5d1ba84e 100644
      }
  
      /**
+diff --git a/forge-ai/src/main/java/forge/ai/simulation/Decisions.java b/forge-ai/src/main/java/forge/ai/simulation/Decisions.java
+new file mode 100644
+index 00000000..16bb3c08
+--- /dev/null
++++ b/forge-ai/src/main/java/forge/ai/simulation/Decisions.java
+@@ -0,0 +1,208 @@
++package forge.ai.simulation;
++
++import java.util.Collections;
++import java.util.LinkedHashMap;
++import java.util.Map;
++import java.util.WeakHashMap;
++
++import forge.game.Game;
++import forge.game.card.Card;
++import forge.game.player.Player;
++import forge.game.spellability.SpellAbility;
++import forge.game.zone.ZoneType;
++
++/**
++ * Learned choices for the cEDH pilot (from cedh-sim train). Each kind of decision has a hand-written default; when the
++ * loaded model has weights for that kind, a small logistic model of the chance to win picks between the two options
++ * instead. Every decision is written to the game's journal with its features, which is what the model trains on.
++ * A small exploration rate (-explore) sometimes takes the other option, so the data holds both, and adds the kind
++ * of variation real players show.
++ *
++ * Kinds: go (cast the winning line now, or wait a turn), shield (with the win in hand, tutor for protection first),
++ * counter (counter an opponent's spell that is not a win, or keep the counterspell).
++ */
++public final class Decisions {
++    private Decisions() { }
++
++    /** Chance of taking the other option, for gathering data. 0 for strength tests. */
++    public static volatile double explore = 0;
++
++    static final java.util.Set<String> PROTECTION = new java.util.LinkedHashSet<>(java.util.Arrays.asList(
++            "Silence", "Orim's Chant", "Pact of Negation", "Force of Will", "Fierce Guardianship", "Force of Negation",
++            "Deflecting Swat", "Mindbreak Trap", "Flusterstorm", "Swan Song", "Veil of Summer", "Autumn's Veil",
++            "Red Elemental Blast", "Pyroblast", "Spell Pierce", "Dispel", "Stern Scolding", "An Offer You Can't Refuse",
++            "Mental Misstep", "Counterspell", "Mana Drain", "Miscalculation", "Daze", "Misdirection", "Commandeer",
++            "Borne Upon a Wind", "Delay", "Snapback", "Grand Abolisher", "Silent Clearing"));
++
++    /** Decisions taken this turn, per player: "turn:kind:tag:" to the option chosen. */
++    private static final Map<Player, Map<String, Boolean>> MEMO = Collections.synchronizedMap(new WeakHashMap<>());
++
++    private static Map<String, Boolean> memoOf(final Player ai) {
++        final String turn = ai.getGame().getPhaseHandler().getTurn() + ":";
++        final Map<String, Boolean> m = MEMO.computeIfAbsent(ai, k -> new java.util.HashMap<>());
++        m.keySet().removeIf(k -> !k.startsWith(turn));
++        return m;
++    }
++
++    /** True for option 1. The same kind is asked once per player per turn; later asks get the same answer. */
++    static boolean choose(final Player ai, final String kind, final Map<String, Double> f, final boolean rule,
++                          final boolean memo) {
++        return choose(ai, kind, f, rule, memo ? "" : null);
++    }
++
++    /** As above; memo is a tag for what is being decided ("" for the kind alone), null to decide every time. */
++    static boolean choose(final Player ai, final String kind, final Map<String, Double> f, final boolean rule,
++                          final String memo) {
++        final Game game = ai.getGame();
++        final String key = game.getPhaseHandler().getTurn() + ":" + kind + ":" + (memo == null ? "" : memo) + ":";
++        if (memo != null) {
++            final Boolean seen = memoOf(ai).get(key);
++            if (seen != null) {
++                return seen;
++            }
++        }
++        boolean pick = rule;
++        String why = "rule";
++        final java.util.Properties m = CedhPilot.mulliganModel;
++        if (m != null && m.containsKey(kind + ".bias")
++                && (CedhPilot.modelOnly == null || CedhPilot.modelOnly.equals(ai.getName()))) {
++            pick = score(m, kind, f, 1) >= score(m, kind, f, 0);
++            why = "model";
++        }
++        if (explore > 0 && forge.util.MyRandom.getRandom().nextDouble() < explore) {
++            pick = !pick;
++            why = "explore";
++        }
++        if (memo != null) {
++            memoOf(ai).put(key, pick);
++        }
++        final StringBuilder sb = new StringBuilder("DECIDE ").append(kind).append(' ').append(pick ? 1 : 0)
++                .append(' ').append(why).append(' ');
++        boolean first = true;
++        for (final Map.Entry<String, Double> e : f.entrySet()) {
++            sb.append(first ? "" : ",").append(e.getKey()).append('=').append(Math.round(e.getValue() * 100) / 100.0);
++            first = false;
++        }
++        CedhPilot.note(game, sb.append(" | ").append(ai.getName()).toString());
++        return pick;
++    }
++
++    private static double w(final java.util.Properties m, final String k) {
++        try {
++            return Double.parseDouble(m.getProperty(k, "0"));
++        } catch (final NumberFormatException e) {
++            return 0;
++        }
++    }
++
++    /** Logistic score: bias + w.f + c * (cw + cw.f), with features scaled as in training. */
++    static double score(final java.util.Properties m, final String kind, final Map<String, Double> f, final int c) {
++        double z = w(m, kind + ".bias") + c * w(m, kind + ".c");
++        for (final Map.Entry<String, Double> e : f.entrySet()) {
++            final double x = e.getValue() / Math.max(1e-9, w(m, kind + ".scale." + e.getKey()) == 0 ? 1
++                    : w(m, kind + ".scale." + e.getKey()));
++            z += w(m, kind + ".w." + e.getKey()) * x + c * w(m, kind + ".cw." + e.getKey()) * x;
++        }
++        return 1.0 / (1.0 + Math.exp(-z));
++    }
++
++    // ---- features ----
++
++    private static int untappedSources(final Player p) {
++        int n = 0;
++        for (final Card c : p.getCardsIn(ZoneType.Battlefield)) {
++            if (!c.isTapped() && !c.getManaAbilities().isEmpty() && !c.isCreature()) {
++                n++;
++            }
++        }
++        return n;
++    }
++
++    static int protectionInHand(final Player ai) {
++        int n = 0;
++        for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
++            n += PROTECTION.contains(c.getName()) ? 1 : 0;
++        }
++        for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
++            n += "Grand Abolisher".equals(c.getName()) ? 1 : 0;
++        }
++        return n;
++    }
++
++    static Map<String, Double> table(final Player ai) {
++        double open = 0, hand = 0, opps = 0;
++        for (final Player o : ai.getOpponents()) {
++            if (o.hasLost()) {
++                continue;
++            }
++            opps++;
++            open += untappedSources(o);
++            hand += o.getCardsIn(ZoneType.Hand).size();
++        }
++        final Map<String, Double> f = new LinkedHashMap<>();
++        f.put("opp_open", opps == 0 ? 0 : open / opps);
++        f.put("opp_hand", opps == 0 ? 0 : hand / opps);
++        f.put("opps", opps);
++        f.put("prot", (double) protectionInHand(ai));
++        f.put("mana", (double) forge.ai.ComputerUtilMana.getAvailableManaEstimate(ai));
++        f.put("round", (double) (ai.getGame().getPhaseHandler().getTurn() + 3) / 4);
++        return f;
++    }
++
++    // ---- the decisions ----
++
++    /** A winning line is ready: go now (the rule) or wait a turn. Never waits with a nearly empty library. */
++    public static boolean goNow(final Player ai, final String line) {
++        if (!CedhPilot.enabled || ai.getCardsIn(ZoneType.Library).size() <= 2) {
++            return true;
++        }
++        final Map<String, Double> f = table(ai);
++        f.put("breach", "breach".equals(line) ? 1.0 : 0.0);
++        return choose(ai, "go", f, true, true);
++    }
++
++    /** True while this player chose to wait with its winning line this turn. */
++    public static boolean waiting(final Player ai) {
++        return Boolean.FALSE.equals(memoOf(ai).get(ai.getGame().getPhaseHandler().getTurn() + ":go::"));
++    }
++
++    /** With the win in hand and a tutor ready: fetch protection first (1) or not (0, the rule). */
++    static boolean shieldFirst(final Player ai) {
++        return choose(ai, "shield", table(ai), false, true);
++    }
++
++    /** The first protection card this player still has in its library, or null. */
++    static String protectionInLibrary(final Player ai) {
++        final java.util.Set<String> lib = new java.util.HashSet<>();
++        for (final Card c : ai.getCardsIn(ZoneType.Library)) {
++            lib.add(c.getName());
++        }
++        for (final String p : PROTECTION) {
++            if (lib.contains(p)) {
++                return p;
++            }
++        }
++        return null;
++    }
++
++    /** Counter an opponent's spell (the rule's answer) or keep the counterspell. Wins are always countered. */
++    public static boolean counter(final Player ai, final SpellAbility target, final int cmc, final boolean rule) {
++        if (!CedhPilot.enabled || target == null || target.getHostCard() == null) {
++            return rule;
++        }
++        final Card host = target.getHostCard();
++        final String name = host.getName();
++        if (CedhPilot.WINNERS.contains(name) || CedhPilot.LOOP_PIECES.contains(name)
++                || target.getApi() == forge.game.ability.ApiType.WinsGame) {
++            return true;
++        }
++        final Map<String, Double> f = table(ai);
++        f.put("cmc", (double) cmc);
++        f.put("creature", host.isCreature() ? 1.0 : 0.0);
++        f.put("engine", CedhPilot.ENGINES.contains(name) || target.getApi() == forge.game.ability.ApiType.Draw
++                ? 1.0 : 0.0);
++        f.put("their_hand", (double) target.getActivatingPlayer().getCardsIn(ZoneType.Hand).size());
++        f.put("ready", CedhPilot.missingOracleHalf(ai) == null && CedhPilot.holdsOracleLine(ai) ? 1.0 : 0.0);
++        return choose(ai, "counter", f, rule, "t" + host.getId());
++    }
++}
 diff --git a/forge-ai/src/main/java/forge/ai/simulation/OpeningHand.java b/forge-ai/src/main/java/forge/ai/simulation/OpeningHand.java
 index 2a4ee9b4..6ea2be21 100644
 --- a/forge-ai/src/main/java/forge/ai/simulation/OpeningHand.java
@@ -949,10 +1241,10 @@ index 2a4ee9b4..6ea2be21 100644
          return !(size >= 6 && lands >= size - 1);
 diff --git a/forge-gui-desktop/src/main/java/forge/view/CedhSim.java b/forge-gui-desktop/src/main/java/forge/view/CedhSim.java
 new file mode 100644
-index 00000000..691d289d
+index 00000000..6e578a71
 --- /dev/null
 +++ b/forge-gui-desktop/src/main/java/forge/view/CedhSim.java
-@@ -0,0 +1,756 @@
+@@ -0,0 +1,757 @@
 +package forge.view;
 +
 +import java.io.File;
@@ -1144,6 +1436,7 @@ index 00000000..691d289d
 +        CedhPilot.loadModel(p.containsKey("model") ? p.get("model").get(0) : null);
 +        final boolean styles = !p.containsKey("nostyles");
 +        CedhPilot.imperfection = p.containsKey("slip") ? Double.parseDouble(p.get("slip").get(0)) : 0.03;
++        forge.ai.simulation.Decisions.explore = p.containsKey("explore") ? Double.parseDouble(p.get("explore").get(0)) : 0;
 +        roundCap = p.containsKey("rounds") ? Integer.parseInt(p.get("rounds").get(0)) : 0;
 +        final Path out = Path.of(p.containsKey("o") ? p.get("o").get(0) : "cedh-out");
 +        final boolean rotate = p.containsKey("rotate");
