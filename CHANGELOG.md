@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased (1.1 candidate)
+
+### Added
+- Card data for every card the engine knows (`cedh_sim/carddata.py`, cached as `cache/card-data.json`): full type
+  line (supertypes, card types, subtypes), mana cost, mana value, colors, color identity, rules text,
+  power/toughness and loyalty, read from the pinned Forge build's card scripts. Split, adventure, modal and
+  double-faced cards follow the official mana value rules.
+- `cedh-sim card NAME`: a card's type line, mana value, identity, rules text, roles and Commander legality.
+- The official Commander banned list (`cedh_sim/banlist.py`, as of Nov 17, 2026; latest change Feb 9, 2026) and the
+  deck-building rules: banned cards, Conspiracy and ante cards, commander eligibility (including legendary Vehicles
+  and Spacecraft), partner pairings (Partner, Partner with, Friends forever, Choose a Background, Doctor's
+  companion), color identity and singleton. Your deck, a Moxfield read, a swapped deck and every pool deck are
+  checked; a deck that breaks them is refused or left out of the pool.
+- `cedh-sim check-cards`: checks every deck against those rules and, with `--download` (or `--scryfall FILE`),
+  compares the engine's card data with Scryfall's oracle data. The `card data check` GitHub workflow runs it.
+- Card roles for every card, worked out from types and rules text, with five new roles for reports: `ramp`,
+  `protection` (e.g. Hexing Squelcher), `stax`, `recursion` and `engine`. The mulligan model still reads the
+  original six, so trained models keep working.
+
+### Changed
+- Swap tests say when the card going out and the card coming in share no card type, so a creature-for-instant
+  swap is read as testing a different slot.
+- Universes Within names (e.g. Greymond, Avacyn's Stalwart) resolve to the card Forge plays.
+
 ## 1.0.0 (2026-11-15)
 
 First public release.

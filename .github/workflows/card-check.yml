@@ -1,0 +1,36 @@
+name: card data check
+
+# Compares the card scripts of the pinned Forge build with Scryfall's oracle data (cost, mana value, card types,
+# color identity, rules text). Runs by hand and whenever the card-data code or the pinned Forge changes.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - cedh_sim/carddata.py
+      - cedh_sim/banlist.py
+      - forge-patch/FORGE_COMMIT
+      - .github/workflows/card-check.yml
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Forge card scripts (no build needed)
+        run: |
+          git init -q forge
+          git -C forge remote add origin https://github.com/Card-Forge/forge.git
+          git -C forge config core.sparseCheckout true
+          echo "forge-gui/res/cardsfolder/" > forge/.git/info/sparse-checkout
+          git -C forge fetch -q --depth 1 --filter=blob:none origin "$(cat forge-patch/FORGE_COMMIT)"
+          git -C forge checkout -q FETCH_HEAD
+      - name: Compare with Scryfall
+        run: python -m cedh_sim check-cards --download --all --limit 0 | tee card-check.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: card-check
+          path: card-check.txt

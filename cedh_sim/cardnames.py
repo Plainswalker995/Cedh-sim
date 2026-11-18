@@ -26,13 +26,15 @@ def build_index() -> dict[str, str]:
     folder = FORGE_HOME / "forge-gui" / "res" / "cardsfolder"
     index: dict[str, str] = {}
     for f in folder.rglob("*.txt"):
-        names, split = [], False
+        names, split, flavor = [], False, []
         try:
             for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
                 if line.startswith("Name:"):
                     names.append(line[5:].strip())
                 elif line.startswith("AlternateMode:") and "Split" in line:
                     split = True
+                elif line.startswith("Variant:") and ":FlavorName:" in line:
+                    flavor.append(line.split(":FlavorName:", 1)[1].strip())  # Universes Within names
         except OSError:
             continue
         if not names:
@@ -41,6 +43,8 @@ def build_index() -> dict[str, str]:
         for n in names:
             index.setdefault(_key(n), deck_name)
         index[_key(deck_name)] = deck_name
+        for n in flavor:
+            index.setdefault(_key(n), deck_name)
     return index
 
 

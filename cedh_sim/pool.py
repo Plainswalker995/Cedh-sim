@@ -10,7 +10,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from . import cardnames
+from . import banlist, cardnames, carddata
 from .decks import parse_text, write_dck
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -70,14 +70,14 @@ def build(src: Path | None = None, out: Path | None = None, meta_file: Path | No
         deck.commanders = [cardnames.resolve(c) or c for c in deck.commanders]
         m = meta.get(key)
         deck.name = " + ".join(c.split(",")[0] for c in deck.commanders)
-        problems = deck.problems()
+        problems = deck.problems() + banlist.check(deck.commanders, deck.main, carddata.info)
         if unknown:
             report["unknown_cards"][f.name] = unknown
             # an unknown card is replaced by a basic land of the deck's colors would distort it; keep the deck only
             # if one or two cards are missing, padded with a Wastes-like colorless land so the count stays 100
             if len(unknown) <= 2:
                 deck.main["Wastes"] = deck.main.get("Wastes", 0) + len(unknown)
-                problems = deck.problems()
+                problems = deck.problems() + banlist.check(deck.commanders, deck.main, carddata.info)
             else:
                 problems.append(f"{len(unknown)} cards Forge doesn't know")
         if problems:

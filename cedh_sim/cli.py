@@ -11,6 +11,8 @@
   cedh-sim refresh-pool               rebuild the opponent pool from decks/pool-meta and the meta shares
   cedh-sim train [--status]           retrain the mulligan model; promote it only if it does better
   cedh-sim check                      check Python, Java and the Forge build
+  cedh-sim card "Hexing Squelcher"    a card's type line, mana value, colors and rules text
+  cedh-sim check-cards [--scryfall F] compare the engine's card data with Scryfall; banned cards in every deck
   cedh-sim auto 120                   Moxfield read, batch, summaries, Doc text, retrain when due
 """
 from __future__ import annotations
@@ -23,7 +25,7 @@ import re
 import sys
 from pathlib import Path
 
-from . import analysis, engine, pool, stats
+from . import analysis, config, engine, pool, stats
 from .decks import load_any, write_dck
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -48,12 +50,28 @@ def _now() -> str:
     return dt.datetime.now().strftime("%Y%m%d-%H%M%S")
 
 
+def rule_problems(commanders: list[str], main: dict[str, int]) -> list[str]:
+    """Commander rule problems: banned cards, commanders and partners, color identity, singleton."""
+    from . import banlist, carddata
+    return banlist.check(commanders, main, carddata.info)
+
+
+def checked(path: Path) -> Path:
+    """The deck file, or stop with its Commander rule problems."""
+    from .decks import load_dck
+    d = load_dck(path)
+    problems = d.problems() + rule_problems(d.commanders, d.main)
+    if problems:
+        raise SystemExit(f"{path.name} breaks the Commander rules: " + "; ".join(problems))
+    return path
+
+
 def prepare_deck(spec: str | None, name: str | None = None) -> Path:
     if not spec:
-        return DEFAULT_DECK
+        return checked(DEFAULT_DECK)
     p = Path(spec).expanduser()
     if p.suffix.lower() == ".dck" and p.exists():
-        return p
+        return checked(p)
     deck = load_any(spec, name=name, cache_dir=ROOT / "cache")
     problems = deck.problems()
     from . import cardnames
@@ -63,6 +81,9 @@ def prepare_deck(spec: str | None, name: str | None = None) -> Path:
     if problems:
         raise SystemExit("Deck problems: " + "; ".join(problems))
     deck.main = {cardnames.resolve(c): n for c, n in deck.main.items()}
+    problems = rule_problems(deck.commanders, deck.main)
+    if problems:
+        raise SystemExit("Deck breaks the Commander rules: " + "; ".join(problems))
     slug = re.sub(r"[^a-z0-9]+", "-", deck.name.lower()).strip("-") or "deck"
     return write_dck(deck, ROOT / "cache" / "decks" / f"{slug}.dck")
 
@@ -123,6 +144,9 @@ def fresh_deck() -> tuple[Path, str]:
         if deck.problems() or unknown:
             return DEFAULT_DECK, "Moxfield list read but has problems; used the saved copy"
         deck.main = {cardnames.resolve(c): n for c, n in deck.main.items()}
+        broken = rule_problems(deck.commanders, deck.main)
+        if broken:
+            return DEFAULT_DECK, "Moxfield list breaks the Commander rules (" + "; ".join(broken) + "); used the saved copy"
         return write_dck(deck, ROOT / "cache" / "decks" / "moxfield-latest.dck"), "read fresh from Moxfield"
     except Exception as e:  # Moxfield blocks automated reads from here most of the time
         return DEFAULT_DECK, f"Moxfield didn't answer ({type(e).__name__}); used the saved copy of your list"
@@ -267,6 +291,9 @@ def swap_deck(base: Path, out_card: str, in_card: str) -> Path:
         d.main[ic] = d.main.get(ic, 0) + 1
         names.append(oc)
     d.name = d.name  # same player name, so the reports line up
+    broken = rule_problems(d.commanders, d.main)
+    if broken:
+        raise SystemExit("The swapped deck breaks the Commander rules: " + "; ".join(broken))
     label = names[0] if len(names) == 1 else f"{len(names)} cards"
     slug = re.sub(r"[^a-z0-9]+", "-", f"{base.stem} {label} to {ic}".lower()).strip("-")
     return write_dck(d, ROOT / "cache" / "decks" / f"{slug}.dck")
@@ -336,6 +363,12 @@ def swap_text(res: dict, out_card: str, in_card: str) -> str:
 def cmd_swap(a) -> None:
     base = prepare_deck(a.deck)
     variant = swap_deck(base, a.out_card, a.in_card)
+    from . import carddata
+    for o in [x.strip() for x in a.out_card.split(";") if x.strip()]:
+        io, ii = carddata.info(o), carddata.info(a.in_card)
+        if io and ii and not set(io["types"]) & set(ii["types"]):
+            print(f"Note: {io['name']} is {io['type_line']} (MV {io['mv']}) and {ii['name']} is {ii['type_line']} "
+                  f"(MV {ii['mv']}): different card types, so this tests a different slot, not a like-for-like swap.")
     pdir = ensure_pool(a.opponents)
     seed = a.seed if a.seed is not None else random.randrange(1, 10**9)
     out = RUNS / f"swap-{_now()}"
@@ -413,8 +446,71 @@ def cmd_check(a) -> None:
     if not err:
         from . import cardnames
         print(f"Cards Forge knows: {len(cardnames.index())}")
+        from . import banlist
+        print(f"Commander banned list: {len(banlist.BANNED)} cards, as of {banlist.AS_OF}")
     if err or not shutil.which("java"):
         raise SystemExit(1)
+
+
+def cmd_card(a) -> None:
+    from . import carddata, learn
+    for n in a.names:
+        print(carddata.describe(n))
+        c = carddata.info(n)
+        if c:
+            from . import banlist
+            roles = learn.card_roles({c["name"]})[c["name"]]
+            print("Roles: " + (", ".join(roles) or "none"))
+            why = banlist.banned_reason(c)
+            print("Commander: " + (why or ("banned as a companion" if c["name"] in banlist.BANNED_AS_COMPANION else "legal")))
+        print()
+
+
+def cmd_check_cards(a) -> None:
+    """Every deck against the banned list and rules, and (with Scryfall's oracle file) the engine's card data
+    against the real cards."""
+    import glob
+    from . import banlist, carddata
+    from .decks import load_dck, parse_text
+    files = [DEFAULT_DECK] + [Path(f) for f in sorted(glob.glob(str(ROOT / "decks" / "*.dck")))
+                              if Path(f) != DEFAULT_DECK]
+    src = config.path("pool_source", ROOT / "decks" / "pool-meta")
+    decks = [(f.stem, load_dck(f)) for f in files if f.exists()]
+    decks += [(f.stem, parse_text(f.read_text(encoding="utf-8"), name=f.stem)) for f in sorted(Path(src).glob("*.txt"))]
+    print(f"Commander banned list as of {banlist.AS_OF}")
+    names, bad = set(), 0
+    for stem, d in decks:
+        problems = rule_problems(d.commanders, d.main)
+        unknown = [c for c in list(d.main) + d.commanders if carddata.info(c) is None]
+        if unknown:
+            problems.append("cards the engine doesn't know: " + ", ".join(unknown))
+        if problems:
+            bad += 1
+            print(f"- {stem}: " + "; ".join(problems))
+        names |= {carddata.info(c)["name"] for c in list(d.main) + d.commanders if carddata.info(c)}
+    print(f"{len(decks)} decks checked, {bad} with problems, {len(names)} different cards.")
+    bulk = Path(a.scryfall) if a.scryfall else None
+    if a.download:
+        bulk = download_scryfall()
+    if not bulk:
+        print("Card data vs the real cards: give --scryfall FILE (Scryfall's oracle-cards bulk file) or --download.")
+        return
+    diffs = carddata.check_scryfall(bulk, None if a.all else names)
+    print(f"Card data vs Scryfall ({'all cards' if a.all else 'cards in these decks'}): {len(diffs)} differences")
+    for d in diffs[: a.limit or None]:
+        print(f"- {d['card']}: {d['problem'] or ''}" + (f" [Commander: {d['commander']}]" if d.get("commander") == "banned" else ""))
+
+
+def download_scryfall() -> Path:
+    import urllib.request
+    req = lambda u: urllib.request.Request(u, headers={"User-Agent": "cedh-sim/1.1", "Accept": "application/json"})
+    meta = json.loads(urllib.request.urlopen(req("https://api.scryfall.com/bulk-data/oracle-cards"), timeout=60).read())
+    out = ROOT / "cache" / "scryfall-oracle-cards.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with urllib.request.urlopen(req(meta["download_uri"]), timeout=300) as r:
+        out.write_bytes(r.read())
+    print(f"Scryfall oracle data from {meta.get('updated_at')}")
+    return out
 
 
 def cmd_metrics(a) -> None:
@@ -455,6 +551,17 @@ def main(argv=None) -> None:
     p.add_argument("--out")
     common(p)
     p.set_defaults(func=cmd_run)
+
+    p = sub.add_parser("card", help="a card's type line, mana value, colors, rules text, roles and legality")
+    p.add_argument("names", nargs="+")
+    p.set_defaults(func=cmd_card)
+
+    p = sub.add_parser("check-cards", help="decks vs the banned list and rules; card data vs Scryfall")
+    p.add_argument("--scryfall", help="Scryfall's oracle-cards bulk file")
+    p.add_argument("--download", action="store_true", help="download Scryfall's oracle-cards file first")
+    p.add_argument("--all", action="store_true", help="compare every card, not only the cards in the decks")
+    p.add_argument("--limit", type=int, default=200, help="most differences to list (default 200, 0 for all)")
+    p.set_defaults(func=cmd_check_cards)
 
     p = sub.add_parser("swap", help="paired swap test")
     p.add_argument("--out", dest="out_card", required=True)

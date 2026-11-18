@@ -20,7 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import analysis, engine, stats
+from . import analysis, cardnames, engine, stats
 
 ROOT = Path(__file__).resolve().parent.parent
 MODELS = ROOT / "models"
@@ -43,75 +43,73 @@ INTERACTION_NAMES = {"Silence", "Orim's Chant", "Pyroblast", "Red Elemental Blas
 
 # ---------------------------------------------------------------- card roles
 
-def _parse_script(text: str) -> dict:
-    out = {"name": None, "types": "", "cost": "", "oracle": "", "mana_ab": False}
-    for line in text.splitlines():
-        if line.startswith("Name:") and out["name"] is None:
-            out["name"] = line[5:].strip()
-        elif line.startswith("Types:") and not out["types"]:
-            out["types"] = line[6:].strip()
-        elif line.startswith("ManaCost:") and not out["cost"]:
-            out["cost"] = line[9:].strip()
-        elif line.startswith("Oracle:") and not out["oracle"]:
-            out["oracle"] = line[7:].strip()
-        elif line.startswith("A:AB$ Mana"):
-            out["mana_ab"] = True
-        elif line.startswith("ALTERNATE"):
-            break
-    return out
-
-
-def _cmc(cost: str) -> int:
-    n = 0
-    for part in cost.split():
-        if part.isdigit():
-            n += int(part)
-        elif part not in ("X", "no", "cost"):
-            n += 1
-    return n
+ROLES_VERSION = 2
+STAX_RE = re.compile(r"can't cast|can't search|can't draw more than|costs? \{\d\} more|don't untap|"
+                     r"can't be activated|can't untap|enter(s)? (the battlefield )?tapped|can't cause|"
+                     r"each player can't|opponents can't|players can't|skip (their|your) untap", re.I)
+PROTECT_RE = re.compile(r"can't be countered|spells you control can't|hexproof|indestructible|"
+                        r"phase(s)? out|your opponents can't cast spells|can't be the targets?", re.I)
 
 
 def classify(info: dict) -> list[str]:
-    name, types, oracle = info["name"], info["types"], info["oracle"].lower()
-    if "Land" in types.split():
+    """cEDH roles from a card's type line, mana value and rules text (a carddata record)."""
+    name, types, mv = info["name"], set(info["types"]), info["mv"]
+    oracle = re.sub(r"\([^)]*\)", "", info["oracle"]).lower()
+    if "Land" in types and not types & {"Creature", "Artifact"}:
         return ["land"]
     roles = []
-    if name in analysis.FAST_MANA or ("Artifact" in types and "Creature" not in types and info["mana_ab"]
-                                       and _cmc(info["cost"]) <= 2):
+    makes_mana = bool(re.search(r"\badd \{|\badd (one|two|three|x) mana|\badd mana", oracle))
+    if name in analysis.FAST_MANA or ("Artifact" in types and "Creature" not in types and makes_mana and mv <= 2) \
+            or (types & {"Instant", "Sorcery"} and makes_mana and mv <= 1):
         roles.append("fast")
-    if re.search(r"search your library for (a|an|any|up to \w+) (?!basic)(?![\w ,-]*land card)", oracle) \
-            and "land" not in oracle.split("search your library for")[1][:40]:
+    elif (makes_mana or re.search(r"untap target (land|forest)|additional land|create (a|two|three|x) treasure", oracle)) and mv <= 4 \
+            and "Land" not in types:
+        roles.append("ramp")
+    if re.search(r"search (your|target opponent's|target player's) library for (a|an|any|up to \w+|one|two|three|x) (?!basic)(?![\w ,-]*land card)", oracle) \
+            and "land" not in re.split(r"library for", oracle, maxsplit=1)[1][:40]:
         roles.append("tutor")
-    if name in INTERACTION_NAMES or re.search(r"counter target|destroy target|exile target|can't cast|"
-                                              r"return target [^.]* to its owner's hand", oracle):
+    if name in INTERACTION_NAMES or re.search(r"counter target|destroy target|exile target|"
+                                              r"return target [^.]* to its owner's hand|exile any number of target|"
+                                              r"deals? \d+ damage to (any|target)|target (nonland )?permanent|"
+                                              r"each opponent sacrifices|destroy all|exile all|"
+                                              r"target player [^.]*discards|target opponent [^.]*discards", oracle):
         roles.append("interaction")
     if name in COMBO_NAMES or "win the game" in oracle:
         roles.append("combo")
-    if re.search(r"\bdraws? (a|two|three|x|that many) cards?|\bdraw cards\b|look at the top", oracle):
+    if re.search(r"\bdraws? (a|an additional|two|three|four|five|six|seven|x|that many) cards?|\bdraw cards\b|"
+                 r"look at the top|put that card into your hand|exile the top [^.]* you may (play|cast)", oracle):
         roles.append("draw")
+    if PROTECT_RE.search(oracle) and "target creature you don't control" not in oracle:
+        roles.append("protection")
+    if re.search(r"from (a|your|their|its owner's) graveyard (on)?to the battlefield|enchanted creature card to the battlefield|"
+                 r"return (target|up to \w+ target) [^.]*card[^.]* from your graveyard to (your hand|the battlefield)|"
+                 r"you may (cast|play) [^.]* from your graveyard", oracle):
+        roles.append("recursion")
+    if re.search(r"\bsacrifice (a|an|another) (creature|artifact|permanent)\b[^.]*:|"
+                 r"whenever [^.]* dies, [^.]*(each opponent|target player|target opponent)|"
+                 r"spells? (you cast )?costs? \{\d\} less|untap (all|target|another|each)|"
+                 r"copy target (instant|sorcery|activated)|you may cast spells as though|create a token that's a copy|"
+                 r"whenever you cast (a|an|your) [^.]*spell", oracle):
+        roles.append("engine")
+    if STAX_RE.search(oracle) and types & {"Artifact", "Enchantment", "Creature", "Planeswalker"}:
+        roles.append("stax")
     return roles
 
 
 def card_roles(names: set[str]) -> dict[str, list[str]]:
+    """Roles for these cards, from the cache of every card's roles (rebuilt when the card data or rules change)."""
+    from . import carddata
     cache = json.loads(ROLES_CACHE.read_text()) if ROLES_CACHE.exists() else {}
-    missing = {n.split(" // ")[0] for n in names} - set(cache)
-    if missing:
-        folder = engine.FORGE_HOME / "forge-gui" / "res" / "cardsfolder"
-        for f in folder.rglob("*.txt"):
-            if not missing:
-                break
-            try:
-                info = _parse_script(f.read_text(encoding="utf-8", errors="replace"))
-            except OSError:
-                continue
-            if info["name"] in missing:
-                cache[info["name"]] = classify(info)
-                missing.discard(info["name"])
-        for n in missing:
-            cache[n] = []
+    if cache.get("_version") != ROLES_VERSION or len(cache) < 1000:
+        cache = {n: classify(rec) for n, rec in carddata.data().items()}
+        cache["_version"] = ROLES_VERSION
         ROLES_CACHE.parent.mkdir(parents=True, exist_ok=True)
         ROLES_CACHE.write_text(json.dumps(cache, indent=0, sort_keys=True))
-    return {n: cache.get(n.split(" // ")[0], []) for n in names}
+    out = {}
+    for n in names:
+        key = cardnames.resolve(n) or n
+        out[n] = cache.get(key) or cache.get(key.split(" // ")[0]) or []
+    return out
 
 
 # ---------------------------------------------------------------- data
@@ -149,7 +147,8 @@ def featurize(rows: list[dict], roles: dict[str, list[str]]) -> np.ndarray:
         c = {k: 0 for k in ("land", "fast", "tutor", "interaction", "combo", "draw")}
         for n in r["hand"]:
             for role in roles.get(n, []):
-                c[role] += 1
+                if role in c:  # the mulligan model reads these six; newer roles are for reports
+                    c[role] += 1
         mana = c["land"] + c["fast"]
         X.append([c["land"], c["land"] ** 2, c["fast"], c["tutor"], c["interaction"], c["combo"], c["draw"],
                   r["size"], 1 if 3 <= mana <= 5 else 0])
@@ -207,7 +206,7 @@ def train(min_examples: int = 400) -> dict:
             expect[size] = 0.25 * (0.85 ** (7 - size))
     by_role = {}
     for n, rs in roles.items():
-        for role in rs:
+        for role in rs if isinstance(rs, list) else []:
             if role != "land":
                 by_role.setdefault(role, set()).add(n.split(" // ")[0])
     from . import decide
