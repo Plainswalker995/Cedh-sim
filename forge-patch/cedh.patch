@@ -169,10 +169,10 @@ index a7d795ed..916947b6 100644
              for (final Player o : ai.getOpponents()) {
 diff --git a/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java b/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java
 new file mode 100644
-index 00000000..5e865d42
+index 00000000..ee90c315
 --- /dev/null
 +++ b/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java
-@@ -0,0 +1,858 @@
+@@ -0,0 +1,847 @@
 +package forge.ai.simulation;
 +
 +import java.util.ArrayList;
@@ -437,42 +437,28 @@ index 00000000..5e865d42
 +        return false;
 +    }
 +
-+    /** Mana this player can make from permanents: lands and mana rocks or creatures with a mana ability. */
-+    private static int manaSources(final Player p) {
-+        int n = 0;
-+        for (final Card c : p.getCardsIn(ZoneType.Battlefield)) {
-+            if (c.isLand() || !c.getManaAbilities().isEmpty()) {
-+                n++;
-+            }
-+        }
-+        return n;
-+    }
-+
-+    /** Stax goes down when an opponent is building a combo or engine, or when we are ahead on mana. */
++    /** Stax goes down when an opponent is building a combo or engine on the table. */
 +    private static boolean staxTime(final Player ai) {
-+        boolean ahead = true;
-+        final int mine = manaSources(ai);
 +        for (final Player o : ai.getOpponents()) {
 +            if (anyRoleIn(o, ZoneType.Battlefield, "combo", "engine")) {
 +                return true;
 +            }
-+            if (manaSources(o) >= mine) {
-+                ahead = false;
-+            }
 +        }
-+        return ahead;
++        return false;
 +    }
 +
 +    /** A combo or win card in hand that can be cast now: this is the turn to go for it. */
-+    private static boolean comboReady(final Player ai, final List<SpellAbility> candidates) {
++    private static int comboReady(final Player ai, final List<SpellAbility> candidates) {
++        int best = -1;
 +        for (final SpellAbility sa : candidates) {
 +            final Card h = sa == null ? null : sa.getHostCard();
 +            if (h != null && sa.isSpell() && h.isInZone(ZoneType.Hand)
-+                    && (hasRole(h, "combo") || WINNERS.contains(h.getName())) && playable(ai, sa)) {
-+                return true;
++                    && (hasRole(h, "combo") || WINNERS.contains(h.getName())) && playable(ai, sa)
++                    && (best < 0 || h.getCMC() < best)) {
++                best = h.getCMC();
 +            }
 +        }
-+        return false;
++        return best;
 +    }
 +
 +    /** Protection that works ahead of time (Silence, Grand Abolisher), not a counter for a spell on the stack. */
@@ -502,12 +488,15 @@ index 00000000..5e865d42
 +            }
 +            String w = null;
 +            if ("early".equals(stage)) {
-+                if (hasRole(h, "ramp") && !hasRole(h, "combo") && h.getCMC() <= 3 && turn <= 3 * game.getPlayers().size()) {
++                final int combo = comboReady(ai, candidates);
++                if (hasRole(h, "ramp") && !hasRole(h, "combo") && h.getCMC() <= 2 && combo < 0
++                        && turn <= 3 * game.getPlayers().size()) {
 +                    w = "ramps";
-+                } else if (hasRole(h, "protection") && preemptive(h) && comboReady(ai, candidates)) {
++                } else if (hasRole(h, "protection") && preemptive(h) && combo >= 0
++                        && forge.ai.ComputerUtilMana.getAvailableManaEstimate(ai, false) >= combo + h.getCMC()) {
 +                    w = "protects the combo turn";
 +                }
-+            } else if ("late".equals(stage)) {
++            } else if ("late".equals(stage) && game.getPhaseHandler().is(PhaseType.MAIN2)) {
 +                if (hasRole(h, "engine") && h.isPermanent() && !hasRole(h, "combo") && h.getCMC() <= 4
 +                        && !controls(ai, h.getName())) {
 +                    w = "starts an engine";

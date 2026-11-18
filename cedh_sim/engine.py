@@ -50,8 +50,10 @@ def java_cmd(hero: Path, pool: Path, n: int, seed: int, start: int, out: Path, o
             cmd += ["-model", str(mp)]
             if opts.get("modelhero"):
                 cmd.append("-modelhero")
-    if opts.get("roles", True):
-        from . import learn  # the AI plays ramp, protection, stax, recursion and engine cards by their role
+    if opts.get("roles", False):
+        # the AI plays ramp, protection, stax, recursion and engine cards by their role (experimental: in tests
+        # so far it won no more often and drew more games, so it is off unless asked for)
+        from . import learn
         cmd += ["-roles", str(learn.roles_file())]
     if opts.get("scenario"):
         cmd += ["-scenario", str(opts["scenario"])]

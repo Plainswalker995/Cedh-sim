@@ -19,10 +19,11 @@
   `protection` (e.g. Hexing Squelcher), `stax`, `recursion` and `engine`. The mulligan model still reads the
   original six, so trained models keep working.
 
-- The AI plays the new roles: ramp goes down in the first rounds, protection like Silence or Grand Abolisher is
-  cast first on the combo turn and other protection is held for it, stax goes down when an opponent is building a
-  combo or engine or when the AI is ahead on mana, recursion is cast when a combo piece or engine is in the
-  graveyard, and engines go down before other permanents. `run --noroles` plays the 1.0 way, for comparison.
+- Experimental `run --roles`: the AI also plays the new roles. Ramp goes down in the first rounds, protection
+  like Silence is cast first on a combo turn when there is mana for both and other protection is held for it,
+  stax goes down when an opponent has a combo piece or engine out, and engines, stax and recursion use mana left
+  in the second main phase. Off by default: in three 40-game tests at normal settings (seed 2026) it won 7, 11
+  and 9 games against 11 without it, and drew 22 to 26 games against 16.
 - About 120 cEDH staples the rules-text patterns missed have a role by name (Toxic Deluge, Show and Tell,
   Mother of Runes, Torpor Orb and others).
 
