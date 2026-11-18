@@ -169,10 +169,10 @@ index a7d795ed..916947b6 100644
              for (final Player o : ai.getOpponents()) {
 diff --git a/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java b/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java
 new file mode 100644
-index 00000000..ed08c889
+index 00000000..5e865d42
 --- /dev/null
 +++ b/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java
-@@ -0,0 +1,700 @@
+@@ -0,0 +1,858 @@
 +package forge.ai.simulation;
 +
 +import java.util.ArrayList;
@@ -277,6 +277,10 @@ index 00000000..ed08c889
 +            note(game, "PLAN " + ai.getName() + " deploys fast mana: " + rock.getHostCard().getName());
 +            return rock;
 +        }
++        final SpellAbility early = rolePlay(ai, candidates, "early");
++        if (early != null) {
++            return early;
++        }
 +        if (engine != null) {
 +            note(game, "PLAN " + ai.getName() + " starts a draw engine: " + engine.getHostCard().getName());
 +            return engine;
@@ -284,6 +288,10 @@ index 00000000..ed08c889
 +        if (commander != null) {
 +            note(game, "PLAN " + ai.getName() + " casts commander: " + commander.getHostCard().getName());
 +            return commander;
++        }
++        final SpellAbility late = rolePlay(ai, candidates, "late");
++        if (late != null) {
++            return late;
 +        }
 +        return useMana(ai, candidates);
 +    }
@@ -382,6 +390,156 @@ index 00000000..ed08c889
 +    /** Cheap card-draw engines cEDH decks deploy early: the cards that win the long game. */
 +    static final java.util.Set<String> ENGINES = java.util.Set.of("Mystic Remora", "Rhystic Study", "Esper Sentinel",
 +            "Necropotence", "Sylvan Library", "Phyrexian Arena", "Trouble in Pairs", "The One Ring");
++
++    /**
++     * Card roles from the simulator's card data (cedh-sim writes them, one "name<TAB>role,role" line per card, and
++     * passes the file with -roles). Empty: the pilot plays as before, with only its own fixed card lists.
++     */
++    static volatile Map<String, java.util.Set<String>> roles = java.util.Collections.emptyMap();
++
++    public static void loadRoles(final String path) {
++        if (path == null) {
++            roles = java.util.Collections.emptyMap();
++            return;
++        }
++        final Map<String, java.util.Set<String>> m = new java.util.HashMap<>();
++        try {
++            for (final String line : java.nio.file.Files.readAllLines(java.nio.file.Paths.get(path),
++                    java.nio.charset.StandardCharsets.UTF_8)) {
++                final int tab = line.indexOf('\t');
++                if (tab > 0) {
++                    m.put(line.substring(0, tab), new java.util.HashSet<>(java.util.Arrays.asList(
++                            line.substring(tab + 1).split(","))));
++                }
++            }
++        } catch (final java.io.IOException e) {
++            System.err.println("card roles not loaded: " + e);
++        }
++        roles = m;
++    }
++
++    static boolean hasRole(final Card c, final String role) {
++        if (c == null) {
++            return false;
++        }
++        final java.util.Set<String> r = roles.get(c.getName());
++        return r != null && r.contains(role);
++    }
++
++    private static boolean anyRoleIn(final Player p, final ZoneType zone, final String... rs) {
++        for (final Card c : p.getCardsIn(zone)) {
++            for (final String r : rs) {
++                if (hasRole(c, r)) {
++                    return true;
++                }
++            }
++        }
++        return false;
++    }
++
++    /** Mana this player can make from permanents: lands and mana rocks or creatures with a mana ability. */
++    private static int manaSources(final Player p) {
++        int n = 0;
++        for (final Card c : p.getCardsIn(ZoneType.Battlefield)) {
++            if (c.isLand() || !c.getManaAbilities().isEmpty()) {
++                n++;
++            }
++        }
++        return n;
++    }
++
++    /** Stax goes down when an opponent is building a combo or engine, or when we are ahead on mana. */
++    private static boolean staxTime(final Player ai) {
++        boolean ahead = true;
++        final int mine = manaSources(ai);
++        for (final Player o : ai.getOpponents()) {
++            if (anyRoleIn(o, ZoneType.Battlefield, "combo", "engine")) {
++                return true;
++            }
++            if (manaSources(o) >= mine) {
++                ahead = false;
++            }
++        }
++        return ahead;
++    }
++
++    /** A combo or win card in hand that can be cast now: this is the turn to go for it. */
++    private static boolean comboReady(final Player ai, final List<SpellAbility> candidates) {
++        for (final SpellAbility sa : candidates) {
++            final Card h = sa == null ? null : sa.getHostCard();
++            if (h != null && sa.isSpell() && h.isInZone(ZoneType.Hand)
++                    && (hasRole(h, "combo") || WINNERS.contains(h.getName())) && playable(ai, sa)) {
++                return true;
++            }
++        }
++        return false;
++    }
++
++    /** Protection that works ahead of time (Silence, Grand Abolisher), not a counter for a spell on the stack. */
++    private static boolean preemptive(final Card c) {
++        final String o = c.getOracleText().toLowerCase(java.util.Locale.ROOT);
++        return c.isPermanent() || o.contains("can't cast") || o.contains("can't be countered")
++                || o.contains("can't be the target");
++    }
++
++    /**
++     * The new roles in play: ramp early, protection first on the combo turn, stax when it hurts the table most,
++     * recursion for a combo piece or engine in the graveyard, engines before other permanents.
++     */
++    static SpellAbility rolePlay(final Player ai, final List<SpellAbility> candidates, final String stage) {
++        if (roles.isEmpty()) {
++            return null;
++        }
++        final Game game = ai.getGame();
++        final int turn = game.getPhaseHandler().getTurn();
++        SpellAbility pick = null;
++        String why = null;
++        for (final SpellAbility sa : candidates) {
++            final Card h = sa == null ? null : sa.getHostCard();
++            if (h == null || !sa.isSpell() || !h.isInZone(ZoneType.Hand) || LOOP_PIECES.contains(h.getName())
++                    || WINNERS.contains(h.getName()) || h.isLand()) {
++                continue;
++            }
++            String w = null;
++            if ("early".equals(stage)) {
++                if (hasRole(h, "ramp") && !hasRole(h, "combo") && h.getCMC() <= 3 && turn <= 3 * game.getPlayers().size()) {
++                    w = "ramps";
++                } else if (hasRole(h, "protection") && preemptive(h) && comboReady(ai, candidates)) {
++                    w = "protects the combo turn";
++                }
++            } else if ("late".equals(stage)) {
++                if (hasRole(h, "engine") && h.isPermanent() && !hasRole(h, "combo") && h.getCMC() <= 4
++                        && !controls(ai, h.getName())) {
++                    w = "starts an engine";
++                } else if (hasRole(h, "stax") && h.isPermanent() && !controls(ai, h.getName()) && staxTime(ai)) {
++                    w = "locks the table";
++                } else if (hasRole(h, "recursion") && !h.isPermanent()
++                        && anyRoleIn(ai, ZoneType.Graveyard, "combo", "engine")) {
++                    w = "brings back a key card";
++                }
++            }
++            if (w == null || !playable(ai, sa)) {
++                continue;
++            }
++            if (pick == null || h.getCMC() < pick.getHostCard().getCMC()) {
++                pick = sa;
++                why = w;
++            }
++        }
++        if (pick != null) {
++            note(game, "PLAN " + ai.getName() + " " + why + ": " + pick.getHostCard().getName());
++        }
++        return pick;
++    }
++
++    /** Reactive protection stays in hand for the turn it matters: the combo turn or an answer to an opponent. */
++    static boolean holdsProtection(final Player ai, final Card h) {
++        if (roles.isEmpty() || h == null || !h.isInZone(ZoneType.Hand) || !hasRole(h, "protection")
++                || hasRole(h, "interaction") || h.isPermanent()) {
++            return false;
++        }
++        return ai.getGame().getStack().isEmpty() && !anyRoleIn(ai, ZoneType.Hand, "combo");
++    }
 +
 +    static final String BREACH = "Underworld Breach";
 +    static final String LED = "Lion's Eye Diamond";
@@ -503,8 +661,8 @@ index 00000000..ed08c889
 +    /** During a turn this player chose to wait with its win, its combo pieces stay in hand. */
 +    public static boolean waitingOn(final Player ai, final SpellAbility sa) {
 +        final Card h = sa == null ? null : sa.getHostCard();
-+        return enabled && h != null && h.isInZone(ZoneType.Hand) && Decisions.waiting(ai)
-+                && (LOOP_PIECES.contains(h.getName()) || WINNERS.contains(h.getName()));
++        return enabled && h != null && h.isInZone(ZoneType.Hand) && (Decisions.waiting(ai)
++                && (LOOP_PIECES.contains(h.getName()) || WINNERS.contains(h.getName())) || holdsProtection(ai, h));
 +    }
 +
 +    /** The half of the Oracle line a tutor should find now, or null when it shouldn't: the other half is in hand. */
@@ -1241,10 +1399,10 @@ index 2a4ee9b4..6ea2be21 100644
          return !(size >= 6 && lands >= size - 1);
 diff --git a/forge-gui-desktop/src/main/java/forge/view/CedhSim.java b/forge-gui-desktop/src/main/java/forge/view/CedhSim.java
 new file mode 100644
-index 00000000..6e578a71
+index 00000000..8008f6ed
 --- /dev/null
 +++ b/forge-gui-desktop/src/main/java/forge/view/CedhSim.java
-@@ -0,0 +1,757 @@
+@@ -0,0 +1,758 @@
 +package forge.view;
 +
 +import java.io.File;
@@ -1434,6 +1592,7 @@ index 00000000..6e578a71
 +        final int timeout = p.containsKey("c") ? Integer.parseInt(p.get("c").get(0)) : 900;
 +        CedhPilot.enabled = !p.containsKey("plainai");
 +        CedhPilot.loadModel(p.containsKey("model") ? p.get("model").get(0) : null);
++        CedhPilot.loadRoles(p.containsKey("roles") ? p.get("roles").get(0) : null);
 +        final boolean styles = !p.containsKey("nostyles");
 +        CedhPilot.imperfection = p.containsKey("slip") ? Double.parseDouble(p.get("slip").get(0)) : 0.03;
 +        forge.ai.simulation.Decisions.explore = p.containsKey("explore") ? Double.parseDouble(p.get("explore").get(0)) : 0;

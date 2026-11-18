@@ -112,7 +112,7 @@ def run_opts(a) -> dict:
     # Default: a little in hands-off batches (auto), none in run and swap tests, where results should be clean.
     explore = a.explore if getattr(a, "explore", None) is not None else (0.05 if a.cmd == "auto" else 0.0)
     return {"rounds": a.rounds, "slip": 0.0 if a.pure else a.slip, "nostyles": a.pure, "mc": a.mc,
-            "explore": 0.0 if a.pure else explore}
+            "explore": 0.0 if a.pure else explore, "roles": not getattr(a, "noroles", False)}
 
 
 def cmd_run(a) -> None:
@@ -557,6 +557,8 @@ def main(argv=None) -> None:
         p.add_argument("--rounds", type=int, default=10, help="turns each before the game is a draw (default 10)")
         p.add_argument("--slip", type=float, default=0.03, help="human-like slip rate (default 0.03)")
         p.add_argument("--pure", action="store_true", help="pure-strength test: no slips, same balanced style at every seat")
+        p.add_argument("--noroles", action="store_true",
+                       help="the AI ignores card roles (ramp, protection, stax, recursion, engine): the 1.0 behaviour")
         p.add_argument("--mc", default="on", choices=["on", "off", "max"], help="search strength (default on)")
         p.add_argument("--explore", type=float, help="how often a learned in-game decision tries the other option, "
                        "to gather training data (default 0.05 in auto, 0 otherwise; 0.15 is good for a data batch)")

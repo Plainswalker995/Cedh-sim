@@ -4,13 +4,13 @@
  .../main/java/forge/ai/ability/ChangeZoneAi.java   |   6 +
  .../src/main/java/forge/ai/ability/CounterAi.java  |   5 +
  .../src/main/java/forge/ai/ability/MillAi.java     |   6 +
- .../main/java/forge/ai/simulation/CedhPilot.java   | 700 +++++++++++++++++++
- .../java/forge/ai/simulation/ConsultationWin.java  |  77 ++-
- .../main/java/forge/ai/simulation/Decisions.java   | 208 ++++++
+ .../main/java/forge/ai/simulation/CedhPilot.java   | 858 +++++++++++++++++++++
+ .../java/forge/ai/simulation/ConsultationWin.java  |  77 +-
+ .../main/java/forge/ai/simulation/Decisions.java   | 208 +++++
  .../main/java/forge/ai/simulation/OpeningHand.java |  21 +-
- .../src/main/java/forge/view/CedhSim.java          | 757 +++++++++++++++++++++
+ .../src/main/java/forge/view/CedhSim.java          | 758 ++++++++++++++++++
  .../src/main/java/forge/view/Main.java             |   6 +-
- forge-gui/res/ai/Cedh.ai                           | 353 ++++++++++
- forge-gui/res/ai/CedhAggro.ai                      | 353 ++++++++++
- forge-gui/res/ai/CedhPatient.ai                    | 353 ++++++++++
- 15 files changed, 2885 insertions(+), 9 deletions(-)
+ forge-gui/res/ai/Cedh.ai                           | 353 +++++++++
+ forge-gui/res/ai/CedhAggro.ai                      | 353 +++++++++
+ forge-gui/res/ai/CedhPatient.ai                    | 353 +++++++++
+ 15 files changed, 3044 insertions(+), 9 deletions(-)

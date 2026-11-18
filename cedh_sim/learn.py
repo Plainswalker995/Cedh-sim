@@ -43,12 +43,46 @@ INTERACTION_NAMES = {"Silence", "Orim's Chant", "Pyroblast", "Red Elemental Blas
 
 # ---------------------------------------------------------------- card roles
 
-ROLES_VERSION = 3
+ROLES_VERSION = 4
 STAX_RE = re.compile(r"can't cast|can't search|can't draw more than|costs? \{\d\} more|don't untap|"
                      r"can't be activated|can't untap|enter(s)? (the battlefield )?tapped|can't cause|"
                      r"each player can't|opponents can't|players can't|skip (their|your) untap", re.I)
 PROTECT_RE = re.compile(r"can't be countered|spells you control can't|hexproof|indestructible|"
                         r"phase(s)? out|your opponents can't cast spells|can't be the targets?", re.I)
+
+
+# cEDH staples whose rules text the patterns below don't catch (checked by hand against how decks use them)
+ROLE_NAMES = {
+    "ramp": {"Utopia Sprawl", "Wild Growth", "Burgeoning", "Dryad Arbor", "Knight of the Reliquary", "Wonder",
+             "Elvish Reclaimer", "Rings of Brighthearth", "Training Grounds", "Zirda, the Dawnwaker"},
+    "interaction": {"Toxic Deluge", "Dismember", "Solitude", "Pyrokinesis", "Thoughtseize", "Fire Covenant",
+                    "Force of Vigor", "Misdirection", "Commandeer", "Submerge", "Subtlety", "Skyclave Apparition",
+                    "Fiend Hunter", "Contagion", "Cave-In", "Firestorm", "Redirect Lightning", "Ricochet Trap",
+                    "Shatterskull Smashing", "Sudden Spoiling", "Wrenn's Resolve", "Unnatural Selection",
+                    "Dauthi Voidwalker", "Opposition Agent", "Molten Disaster", "Delayed Blast Fireball"},
+    "draw": {"Sylvan Library", "Windfall", "Final Fortune", "Last Chance", "Scroll Rack", "Faerie Seer",
+             "Reckless Impulse", "Telepathy", "Tivit, Seller of Secrets", "Wrenn's Resolve"},
+    "engine": {"Sylvan Library", "Scroll Rack", "Rings of Brighthearth", "Panharmonicon", "Aether Vial",
+               "Goblin Welder", "Deadeye Navigator", "Chatterfang, Squirrel General", "Ashaya, Soul of the Wild",
+               "Tireless Provisioner", "Arcum Dagsson", "Kambal, Profiteering Mayor", "Magda, the Hoardmaster"},
+    "stax": {"Torpor Orb", "Trinisphere", "Sanctum Prelate", "Magus of the Moon", "Aven Mindcensor", "Counterbalance",
+             "Kataki, War's Wage", "Void Mirror", "Gerrard's Hourglass Pendant", "Hunting Grounds",
+             "Crippling Fear", "Moonshadow"},
+    "protection": {"Mother of Runes", "Giver of Runes", "Lightning Greaves", "Spellskite", "Benevolent Bodyguard",
+                   "Sylvan Safekeeper", "Shield Sphere", "Blazing Shoal", "Misdirection", "Gilded Drake"},
+    "recursion": {"Past in Flames", "Noxious Revival", "Corpse Dance", "Shallow Grave", "Dance of the Dead",
+                  "Ghoulcaller's Bell", "Recoup", "Flashback", "Pattern of Rebirth", "Unlicensed Hearse",
+                  "Eternal Scourge", "Mortuary"},
+    "tutor": {"Expedition Map", "Sylvan Scrying", "Finale of Devastation", "Rob the Archives", "Step Through",
+              "Inspired Tinkering", "Shigeki, Jukai Visionary"},
+    "combo": {"Show and Tell", "Sneak Attack", "Omniscience", "Tendrils of Agony", "Mind's Desire", "Past in Flames",
+              "Phantasmal Image", "Spark Double", "Clone", "Phyrexian Metamorph", "Sakashima's Student",
+              "Sakashima of a Thousand Faces", "Body Double", "Zirda, the Dawnwaker", "Deadeye Navigator",
+              "Ashaya, Soul of the Wild", "Gilded Drake", "Phyrexian Devourer", "Rings of Brighthearth",
+              "Scheming Symmetry", "Eureka", "Hellkite Courser", "Kellan, the Fae-Blooded", "Glasspool Mimic",
+              "Vizier of Many Faces", "Mirage Mirror", "Sculpting Steel", "Metallic Mimic", "Nyxbloom Ancient",
+              "Temporal Trespass", "Imposter Mech", "Copy Enchantment"},
+}
 
 
 def classify(info: dict) -> list[str]:
@@ -93,7 +127,24 @@ def classify(info: dict) -> list[str]:
         roles.append("engine")
     if STAX_RE.search(oracle) and types & {"Artifact", "Enchantment", "Creature", "Planeswalker"}:
         roles.append("stax")
+    for role, names in ROLE_NAMES.items():
+        if name in names and role not in roles:
+            roles.append(role)
     return roles
+
+
+ROLES_FILE = ROLES_CACHE.with_name("card-roles.tsv")
+
+
+def roles_file() -> Path:
+    """Every card with a role, one "name<TAB>role,role" line each, for the engine's pilot (-roles)."""
+    if not ROLES_FILE.exists() or ROLES_FILE.stat().st_mtime < (ROLES_CACHE.stat().st_mtime if ROLES_CACHE.exists() else 0) \
+            or not ROLES_CACHE.exists():
+        card_roles({"Sol Ring"})  # builds the cache when needed
+        cache = json.loads(ROLES_CACHE.read_text())
+        lines = [f"{n}\t{','.join(r)}" for n, r in sorted(cache.items()) if isinstance(r, list) and r]
+        ROLES_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return ROLES_FILE
 
 
 def card_roles(names: set[str]) -> dict[str, list[str]]:
