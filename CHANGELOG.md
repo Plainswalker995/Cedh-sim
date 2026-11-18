@@ -23,6 +23,7 @@
 - Swap tests say when the card going out and the card coming in share no card type, so a creature-for-instant
   swap is read as testing a different slot.
 - Universes Within names (e.g. Greymond, Avacyn's Stalwart) resolve to the card Forge plays.
+- Color identity counts basic land types, so Triomes and shocklands carry their colors in the deck check.
 
 ## 1.0.0 (2026-11-15)
 
