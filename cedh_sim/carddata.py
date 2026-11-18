@@ -222,7 +222,12 @@ def check_scryfall(bulk: Path, names: set[str] | None = None) -> list[dict]:
     if raw[:2] == b"\x1f\x8b":  # Scryfall serves the bulk file gzipped
         import gzip
         raw = gzip.decompress(raw)
-    for c in json.loads(raw.decode("utf-8")):
+    text = raw.decode("utf-8")
+    try:
+        cards = json.loads(text)
+    except json.JSONDecodeError:  # one card per line (JSON Lines)
+        cards = [json.loads(l.rstrip(",")) for l in text.splitlines() if l.strip() not in ("", "[", "]")]
+    for c in cards:
         if c.get("layout") in ("token", "double_faced_token", "emblem", "art_series", "vanguard", "scheme",
                                "planar") or c.get("set_type") in ("memorabilia", "token"):
             continue
