@@ -207,6 +207,22 @@ def _norm(s: str) -> str:
     return s.strip().lower()
 
 
+SELF_RE = re.compile(r"\bthis (creature|artifact|enchantment|land|spell|card|permanent|equipment|vehicle|aura|"
+                     r"planeswalker|token|battle|siege|class|saga|room|case|spacecraft|planet|object|source)\b")
+
+
+def _self_norm(text: str, name: str) -> str:
+    """Rules text with every way of naming the card itself made the same: Scryfall's current Oracle says
+    "this creature" or a short name ("Zur") where older wording used the full name."""
+    t = _norm(text)
+    names = {name, name.split(" // ")[0], name.split(",")[0], name.split(" ")[0], name.split(" of ")[0],
+             name.split(" the ")[0]}
+    for n in sorted({_norm(x) for x in names if len(x) > 2}, key=len, reverse=True):
+        t = re.sub(r"(?<![\w'])" + re.escape(n) + r"(?![\w])", "~", t)
+    t = SELF_RE.sub("~", t)
+    return re.sub(r"~(?:'s)?(\s*~)+", "~", t)
+
+
 def _sf_types(type_line: str) -> list[str]:
     left = type_line.split(" — ")[0]
     return sorted(w for w in left.split() if w in CARD_TYPES)
@@ -258,7 +274,7 @@ def check_scryfall(bulk: Path, names: set[str] | None = None) -> list[dict]:
         if real_cost is not None and _norm(real_cost.replace(" ", "")) != _norm(rec["mana_cost"].replace(" ", "")):
             diffs.append(f"cost {rec['mana_cost'] or 'none'} vs real {real_cost or 'none'}")
         real_text = s.get("oracle_text") if "card_faces" not in s else s["card_faces"][0].get("oracle_text", "")
-        a, b = _norm(rec["oracle"]), _norm(real_text)
+        a, b = _self_norm(rec["oracle"], rec["name"]), _self_norm(real_text, rec["name"])
         if rec["layout"] not in COMBINED_MV and a != b:
             i = next((k for k in range(min(len(a), len(b))) if a[k] != b[k]), min(len(a), len(b)))
             diffs.append(f"rules text differs: engine '{a[max(0, i - 15):i + 25]}' vs real '{b[max(0, i - 15):i + 25]}'")
