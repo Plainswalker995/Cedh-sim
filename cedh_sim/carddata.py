@@ -218,7 +218,11 @@ def check_scryfall(bulk: Path, names: set[str] | None = None) -> list[dict]:
     `bulk` is Scryfall's "oracle-cards" bulk file. `names` limits the check (deck names); None checks all.
     """
     sf = {}
-    for c in json.loads(bulk.read_text(encoding="utf-8")):
+    raw = bulk.read_bytes()
+    if raw[:2] == b"\x1f\x8b":  # Scryfall serves the bulk file gzipped
+        import gzip
+        raw = gzip.decompress(raw)
+    for c in json.loads(raw.decode("utf-8")):
         if c.get("layout") in ("token", "double_faced_token", "emblem", "art_series", "vanguard", "scheme",
                                "planar") or c.get("set_type") in ("memorabilia", "token"):
             continue
