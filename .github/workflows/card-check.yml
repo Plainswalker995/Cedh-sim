@@ -29,7 +29,9 @@ jobs:
           git -C forge fetch -q --depth 1 --filter=blob:none origin "$(cat forge-patch/FORGE_COMMIT)"
           git -C forge checkout -q FETCH_HEAD
       - name: Compare with Scryfall
-        run: python -m cedh_sim check-cards --download --all --limit 0 | tee card-check.txt
+        run: |
+          set -o pipefail
+          python -m cedh_sim check-cards --download --all --limit 0 | tee card-check.txt
       - uses: actions/upload-artifact@v4
         with:
           name: card-check

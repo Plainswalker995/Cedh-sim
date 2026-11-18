@@ -504,7 +504,10 @@ def cmd_check_cards(a) -> None:
 def download_scryfall() -> Path:
     import urllib.request
     req = lambda u: urllib.request.Request(u, headers={"User-Agent": "cedh-sim/1.1", "Accept": "application/json"})
-    meta = json.loads(urllib.request.urlopen(req("https://api.scryfall.com/bulk-data/oracle-cards"), timeout=60).read())
+    listing = json.loads(urllib.request.urlopen(req("https://api.scryfall.com/bulk-data"), timeout=60).read())
+    meta = next((b for b in listing.get("data", []) if b.get("type") == "oracle_cards"), None)
+    if not meta:
+        raise SystemExit("Scryfall's bulk-data list has no oracle_cards file: " + json.dumps(listing)[:300])
     out = ROOT / "cache" / "scryfall-oracle-cards.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     with urllib.request.urlopen(req(meta["download_uri"]), timeout=300) as r:
