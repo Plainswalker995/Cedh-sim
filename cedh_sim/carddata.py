@@ -68,12 +68,17 @@ def _strip_reminder(text: str) -> str:
     return re.sub(r"\([^)]*\)", "", text)
 
 
+LAND_COLORS = {"Plains": "W", "Island": "U", "Swamp": "B", "Mountain": "R", "Forest": "G"}
+
+
 def _identity(faces: list[dict]) -> list[str]:
     """Color identity (rule 903.4): colors of costs, color indicators and mana symbols in rules text."""
     found = set()
     for f in faces:
         found |= set(c for c in f["cost_raw"] if c in COLORS)
         found |= set(f["colors"])
+        # basic land types give a mana ability (rule 305.6), so a Triome or shockland has those colors
+        found |= {LAND_COLORS[t] for t in f.get("subtypes", []) if t in LAND_COLORS}
         for sym in re.findall(r"\{([^}]+)\}", _strip_reminder(f["oracle"])):
             found |= set(c for c in sym if c in COLORS)
     return [c for c in COLORS if c in found]
@@ -220,7 +225,11 @@ def _self_norm(text: str, name: str) -> str:
     for n in sorted({_norm(x) for x in names if len(x) > 2}, key=len, reverse=True):
         t = re.sub(r"(?<![\w'])" + re.escape(n) + r"(?![\w])", "~", t)
     t = SELF_RE.sub("~", t)
-    return re.sub(r"~(?:'s)?(\s*~)+", "~", t)
+    t = re.sub(r"~(?:'s)?(\s*~)+", "~", t)
+    # reminder text and punctuation ("[+1]:" vs "+1:") are not rules differences
+    t = re.sub(r"\([^)]*\)", "", t)
+    t = re.sub(r"[\[\].,;:\"]", "", t)
+    return re.sub(r"\s+", " ", t).strip()
 
 
 def _sf_types(type_line: str) -> list[str]:
