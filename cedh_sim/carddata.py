@@ -258,8 +258,10 @@ def check_scryfall(bulk: Path, names: set[str] | None = None) -> list[dict]:
         if real_cost is not None and _norm(real_cost.replace(" ", "")) != _norm(rec["mana_cost"].replace(" ", "")):
             diffs.append(f"cost {rec['mana_cost'] or 'none'} vs real {real_cost or 'none'}")
         real_text = s.get("oracle_text") if "card_faces" not in s else s["card_faces"][0].get("oracle_text", "")
-        if rec["layout"] not in COMBINED_MV and _norm(real_text) != _norm(rec["oracle"]):
-            diffs.append("rules text differs")
+        a, b = _norm(rec["oracle"]), _norm(real_text)
+        if rec["layout"] not in COMBINED_MV and a != b:
+            i = next((k for k in range(min(len(a), len(b))) if a[k] != b[k]), min(len(a), len(b)))
+            diffs.append(f"rules text differs: engine '{a[max(0, i - 15):i + 25]}' vs real '{b[max(0, i - 15):i + 25]}'")
         if sorted(s.get("color_identity", [])) != sorted(rec["color_identity"]):
             diffs.append(f"identity {''.join(rec['color_identity']) or 'C'} vs real {''.join(s.get('color_identity', [])) or 'C'}")
         legal = (s.get("legalities") or {}).get("commander")
