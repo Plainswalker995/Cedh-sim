@@ -42,7 +42,7 @@ def mana_value(cost: str) -> int:
             n += int(part)
         elif part in ("X", "Y", "Z", "no", "cost"):
             continue
-        elif part.startswith("2/"):
+        elif re.fullmatch(r"2/?[WUBRGC]", part):  # monocolored hybrid ("2B" in Forge, {2/B}) counts 2
             n += 2
         else:
             n += 1

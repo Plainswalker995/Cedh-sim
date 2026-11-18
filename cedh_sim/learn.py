@@ -43,7 +43,7 @@ INTERACTION_NAMES = {"Silence", "Orim's Chant", "Pyroblast", "Red Elemental Blas
 
 # ---------------------------------------------------------------- card roles
 
-ROLES_VERSION = 2
+ROLES_VERSION = 3
 STAX_RE = re.compile(r"can't cast|can't search|can't draw more than|costs? \{\d\} more|don't untap|"
                      r"can't be activated|can't untap|enter(s)? (the battlefield )?tapped|can't cause|"
                      r"each player can't|opponents can't|players can't|skip (their|your) untap", re.I)

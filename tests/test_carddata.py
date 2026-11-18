@@ -61,3 +61,9 @@ class Rules(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MonoHybridTest(unittest.TestCase):
+    def test_two_hybrid_counts_two(self):
+        self.assertEqual(carddata.mana_value("2B 2B 2B"), 6)
+        self.assertEqual(carddata.mana_value("2/B 2/R 2/G"), 6)

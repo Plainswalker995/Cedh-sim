@@ -24,6 +24,7 @@
   swap is read as testing a different slot.
 - Universes Within names (e.g. Greymond, Avacyn's Stalwart) resolve to the card Forge plays.
 - Color identity counts basic land types, so Triomes and shocklands carry their colors in the deck check.
+- Mana value counts monocolored hybrid symbols ({2/B}) as 2, so Beseech the Queen is 6, as printed.
 
 ## 1.0.0 (2026-11-15)
 
