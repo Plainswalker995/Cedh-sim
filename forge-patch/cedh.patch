@@ -1,19 +1,36 @@
 diff --git a/forge-ai/src/main/java/forge/ai/AiController.java b/forge-ai/src/main/java/forge/ai/AiController.java
-index dd2a6e13..bd21276d 100644
+index dd2a6e13..8fc44e50 100644
 --- a/forge-ai/src/main/java/forge/ai/AiController.java
 +++ b/forge-ai/src/main/java/forge/ai/AiController.java
-@@ -2155,6 +2155,10 @@ public class AiController {
-             final Card h = spellAbility.getHostCard();
-             return h != null && ((ComputerUtilCard.isCardRemAIDeck(h) && !flatMc) || ComboAssembly.deadOnArrival(player, spellAbility)
-                     || (flatMc && LoopRunner.held(player, spellAbility))
-+                    || (flatMc && ConsultationWin.heldForOracle(player, spellAbility))
-+                    || (flatMc && ConsultationWin.heldWinner(player, spellAbility))
-+                    || (flatMc && forge.ai.simulation.CedhPilot.heldForBreach(player, spellAbility))
-+                    || (flatMc && forge.ai.simulation.CedhPilot.waitingOn(player, spellAbility))
-                     || (flatMc && SurpriseEntry.isEntryAbility(spellAbility) && !SurpriseEntry.offered(player, spellAbility))
-                     || (flatMc && FlatMonteCarloPicker.needlessTrick(player, spellAbility))
-                     || (flatMc && SpecialActions.waitsForCombat(player, spellAbility))
-@@ -2171,13 +2175,13 @@ public class AiController {
+@@ -2148,36 +2148,26 @@ public class AiController {
+         // Flat MC compares them with rollouts, the heuristics still decide for every other card
+         // Every other card marked AI:RemoveDeck:All stays in the list too, for Flat MC alone: see isFlatMcOnlyPlay
+         final boolean flatMc = flatMonteCarloActive();
++        final java.util.Map<SpellAbility, String> heldWhy = new java.util.IdentityHashMap<>();
+         saList.removeIf(spellAbility -> {
+-            if (spellAbility.isLandAbility()) {
+-                return true;
++            final String why = filterReason(spellAbility, flatMc);
++            if (why != null) {
++                heldWhy.put(spellAbility, why);
+             }
+-            final Card h = spellAbility.getHostCard();
+-            return h != null && ((ComputerUtilCard.isCardRemAIDeck(h) && !flatMc) || ComboAssembly.deadOnArrival(player, spellAbility)
+-                    || (flatMc && LoopRunner.held(player, spellAbility))
+-                    || (flatMc && SurpriseEntry.isEntryAbility(spellAbility) && !SurpriseEntry.offered(player, spellAbility))
+-                    || (flatMc && FlatMonteCarloPicker.needlessTrick(player, spellAbility))
+-                    || (flatMc && SpecialActions.waitsForCombat(player, spellAbility))
+-                    // an equip is an investment: it does not take the mana of a creature that could be cast instead
+-                    || (flatMc && spellAbility.isEquip() && !FlatMonteCarloPicker.sparesMana(player, spellAbility))
+-                    // the upkeep is for a forecast ability, if its cost costs nothing the first main phase needs
+-                    || (flatMc && Forecast.beforeOwnMain(player)
+-                        && !(Forecast.isForecast(spellAbility) && Forecast.worthIt(player, spellAbility)))
+-                    || (flatMc && FlatMonteCarloPicker.isOtherZonePlay(spellAbility)
+-                    && !FlatMonteCarloPicker.sparesMana(player, spellAbility)));
++            return why != null;
+         });
+         //removed skipped SA
+         skipped = saList.stream().filter(SpellAbility::isSkip).collect(Collectors.toList());
          if (!skipped.isEmpty())
              saList.removeAll(skipped);
  
@@ -25,17 +42,23 @@ index dd2a6e13..bd21276d 100644
              }
              final SpellAbility oracle = ConsultationWin.sureCast(player, saList);
 -            if (oracle != null) {
-+            if (oracle != null && forge.ai.simulation.Decisions.goNow(player, "oracle")) {
++            if (oracle != null && forge.ai.simulation.Decisions.goNow(player, "oracle") && goForWinNow(oracle)) {
                  return oracle; // Thassa's Oracle with Demonic Consultation in hand: cast it, the Consultation answers its trigger
              }
              final SpellAbility pileDraw = DoomsdayPile.sureDraw(player, saList);
-@@ -2222,6 +2226,13 @@ public class AiController {
+@@ -2222,6 +2212,19 @@ public class AiController {
                  return assembly; // a catalogued combo whose other cards are all in play or in hand: put it together
              }
          }
 +        final SpellAbility cedhOpening = forge.ai.simulation.CedhPilot.sureCast(player, saList);
 +        if (flatMc) {
-+            saList.removeIf(s -> forge.ai.simulation.CedhPilot.waitingOn(player, s)); // waiting a turn with the win
++            saList.removeIf(s -> {
++                final boolean wait = forge.ai.simulation.CedhPilot.waitingOn(player, s);
++                if (wait) {
++                    heldWhy.put(s, "waiting");
++                }
++                return wait;
++            }); // waiting a turn with the win
 +        }
 +        if (cedhOpening != null && !hasFailedToCast(cedhOpening)) {
 +            return cedhOpening; // cEDH habits: fast mana down, commander out as soon as it can be paid for
@@ -43,7 +66,142 @@ index dd2a6e13..bd21276d 100644
          if (flatMc && game.getStack().isEmpty()) {
              // Stiflenought: the Dreadnought is cast as soon as its Stifle can be paid for as well, without rollouts
              final SpellAbility sureStifle = StifleCombo.sureCast(player, saList);
-@@ -3636,6 +3647,13 @@ public class AiController {
+@@ -2262,9 +2265,24 @@ public class AiController {
+             if (discover) {
+                 approved = FlatMonteCarloPicker.diversify(approved, mcCfg.maxCandidates);
+             }
+-            FlatMonteCarloStats.noteDecisionPoint(approved.size(), mcCfg == null);
++            // Cards that would help but that the heuristics passed over: the rollouts compare casting each with holding
++            // it (a key choice: with lookahead on, more rollouts and the next opponent's turn played out as well).
++            FlatMonteCarloPicker.Config useCfg = mcCfg;
++            final List<SpellAbility> held = forge.ai.simulation.CedhPilot.heldUseful(player, saList, approved);
++            if (!held.isEmpty()) {
++                extras.removeAll(held);
++                extras.addAll(0, held);
++                final FlatMonteCarloPicker.Config base = mcCfg != null ? mcCfg : FlatMonteCarloPicker.Config.fromProfile(this, player);
++                // the second main phase is the last chance to use this turn's mana: that is where lookahead is spent
++                final boolean key = game.getPhaseHandler().is(PhaseType.MAIN2);
++                useCfg = base.keyChoice(key ? forge.ai.simulation.CedhPilot.lookahead : 0, held.size());
++                if (key) {
++                    forge.ai.simulation.CedhPilot.noteKey(player, "cast or hold", held.get(0));
++                }
++            }
++            FlatMonteCarloStats.noteDecisionPoint(approved.size(), useCfg == null);
+             try {
+-                chosenSa = refineWithFlatMonteCarlo(approved, extras, mcCfg, FlatMonteCarloPicker.Mode.MAIN);
++                chosenSa = refineWithFlatMonteCarlo(approved, extras, useCfg, FlatMonteCarloPicker.Mode.MAIN);
+             } catch (final AITimeoutTracker.Expired e) {
+                 throw e;
+             } catch (final RuntimeException e) {
+@@ -2277,6 +2295,10 @@ public class AiController {
+             chosenSa = chooseSpellAbilityToPlayFromList(saList, true);
+         }
+ 
++        if (chosenSa == null && game.getStack().isEmpty() && game.getPhaseHandler().isPlayerTurn(player)
++                && game.getPhaseHandler().getPhase().isMain()) {
++            forge.ai.simulation.CedhPilot.noteHeld(player, heldWhy, saList);
++        }
+         if (topOwnedByAI && !mustRespond && chosenSa != ComputerUtilAbility.getFirstCopySASpell(saList)) {
+             return null; // not planning to copy the spell and not marked as something the AI would respond to
+         }
+@@ -2284,6 +2306,78 @@ public class AiController {
+         return chosenSa;
+     }
+ 
++    private int goLookTurn = -1;
++    private boolean goLookAnswer = true;
++
++    /**
++     * Go for the win now or wait: with lookahead on, and an opponent with cards in hand and mana open to answer it,
++     * the rollouts compare casting the win with passing (their answers played out). Waits only when the rollouts say
++     * so; asked once a turn. Without lookahead, or with nobody able to answer, the win goes ahead.
++     */
++    private boolean goForWinNow(final SpellAbility win) {
++        if (forge.ai.simulation.CedhPilot.lookahead <= 0) {
++            return true;
++        }
++        final int turn = game.getPhaseHandler().getTurn();
++        if (turn == goLookTurn) {
++            return goLookAnswer;
++        }
++        boolean answerable = false;
++        for (final Player o : player.getOpponents()) {
++            answerable |= !o.getCardsIn(ZoneType.Hand).isEmpty() && ComputerUtilMana.getAvailableManaEstimate(o, false) > 0;
++        }
++        goLookTurn = turn;
++        goLookAnswer = true;
++        if (!answerable) {
++            return true;
++        }
++        try {
++            final FlatMonteCarloPicker.Config cfg = FlatMonteCarloPicker.Config.fromProfile(this, player)
++                    .keyChoice(forge.ai.simulation.CedhPilot.lookahead, 0);
++            cfg.considerHolding = true;
++            final List<SpellAbility> one = new ArrayList<>();
++            one.add(win);
++            final FlatMonteCarloPicker.Result r = FlatMonteCarloPicker.choose(player, one, new ArrayList<>(), cfg,
++                    sa -> true, FlatMonteCarloPicker.Mode.MAIN);
++            flatMcTurnSpentNanos += r.elapsedNanos;
++            goLookAnswer = !(r.hold && r.decidedByRollouts);
++            forge.ai.simulation.CedhPilot.noteKey(player, goLookAnswer ? "goes for the win" : "waits with the win", win);
++        } catch (final AITimeoutTracker.Expired e) {
++            throw e;
++        } catch (final RuntimeException e) {
++            goLookAnswer = true;
++        }
++        return goLookAnswer;
++    }
++
++    /** Why a play is taken out of the list before the AI chooses (null: it stays), for the journal of held cards. */
++    private String filterReason(final SpellAbility spellAbility, final boolean flatMc) {
++        if (spellAbility.isLandAbility()) {
++            return "land";
++        }
++        final Card h = spellAbility.getHostCard();
++        if (h == null) {
++            return null;
++        }
++        if (ComputerUtilCard.isCardRemAIDeck(h) && !flatMc) return "removeDeck";
++        if (ComboAssembly.deadOnArrival(player, spellAbility)) return "deadOnArrival";
++        if (!flatMc) return null;
++        if (LoopRunner.held(player, spellAbility)) return "loopHeld";
++        if (ConsultationWin.heldForOracle(player, spellAbility)) return "heldForOracle";
++        if (ConsultationWin.heldWinner(player, spellAbility)) return "heldWinner";
++        if (forge.ai.simulation.CedhPilot.heldForBreach(player, spellAbility)) return "heldForBreach";
++        if (forge.ai.simulation.CedhPilot.waitingOn(player, spellAbility)) return "waiting";
++        if (SurpriseEntry.isEntryAbility(spellAbility) && !SurpriseEntry.offered(player, spellAbility)) return "surprise";
++        if (FlatMonteCarloPicker.needlessTrick(player, spellAbility)) return "needlessTrick";
++        if (SpecialActions.waitsForCombat(player, spellAbility)) return "waitsForCombat";
++        // an equip is an investment: it does not take the mana of a creature that could be cast instead
++        if (spellAbility.isEquip() && !FlatMonteCarloPicker.sparesMana(player, spellAbility)) return "equip";
++        // the upkeep is for a forecast ability, if its cost costs nothing the first main phase needs
++        if (Forecast.beforeOwnMain(player) && !(Forecast.isForecast(spellAbility) && Forecast.worthIt(player, spellAbility))) return "forecast";
++        if (FlatMonteCarloPicker.isOtherZonePlay(spellAbility) && !FlatMonteCarloPicker.sparesMana(player, spellAbility)) return "otherZone";
++        return null;
++    }
++
+     private SpellAbility chooseSpellAbilityToPlayFromList(final List<SpellAbility> all, boolean skipCounter) {
+         final List<SpellAbility> chosen = chooseSpellAbilitiesToPlayFromList(all, skipCounter, 1);
+         return chosen.isEmpty() ? null : chosen.get(0);
+@@ -2423,8 +2517,16 @@ public class AiController {
+         if (shown.isEmpty() && extras.isEmpty()) {
+             return null; // nothing to do with this priority: pass, at no cost
+         }
++        // Counter or let it resolve is a key choice: with lookahead on, more rollouts and the next turn played out too
++        FlatMonteCarloPicker.Config useCfg = cfg;
++        if (mode == FlatMonteCarloPicker.Mode.RESPOND && forge.ai.simulation.CedhPilot.lookahead > 0
++                && (shown.stream().anyMatch(sa -> sa.getApi() == ApiType.Counter)
++                    || extras.stream().anyMatch(sa -> sa.getApi() == ApiType.Counter))) {
++            useCfg = cfg.keyChoice(forge.ai.simulation.CedhPilot.lookahead, 0);
++            forge.ai.simulation.CedhPilot.noteKey(player, "counter or let resolve", top);
++        }
+         try {
+-            final SpellAbility chosen = refineWithFlatMonteCarlo(shown, extras, cfg, mode);
++            final SpellAbility chosen = refineWithFlatMonteCarlo(shown, extras, useCfg, mode);
+             if (lastFlatMcResult != null) {
+                 FlatMonteCarloStats.noteReactiveResult(mode, lastFlatMcResult, shown.isEmpty() ? null : shown.get(0));
+             }
+@@ -3636,6 +3738,13 @@ public class AiController {
              return simPicker.chooseCardToHiddenOriginChangeZone(destination, origin, sa, fetchList, player2, decider);
          }
  
@@ -169,10 +327,10 @@ index a7d795ed..916947b6 100644
              for (final Player o : ai.getOpponents()) {
 diff --git a/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java b/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java
 new file mode 100644
-index 00000000..ee90c315
+index 00000000..629fe2e4
 --- /dev/null
 +++ b/forge-ai/src/main/java/forge/ai/simulation/CedhPilot.java
-@@ -0,0 +1,847 @@
+@@ -0,0 +1,988 @@
 +package forge.ai.simulation;
 +
 +import java.util.ArrayList;
@@ -397,6 +555,9 @@ index 00000000..ee90c315
 +     */
 +    static volatile Map<String, java.util.Set<String>> roles = java.util.Collections.emptyMap();
 +
++    /** The experimental role play (-roleplay): ramp, protection, stax, recursion and engines by role. */
++    public static volatile boolean rolePlayOn = false;
++
 +    public static void loadRoles(final String path) {
 +        if (path == null) {
 +            roles = java.util.Collections.emptyMap();
@@ -473,7 +634,7 @@ index 00000000..ee90c315
 +     * recursion for a combo piece or engine in the graveyard, engines before other permanents.
 +     */
 +    static SpellAbility rolePlay(final Player ai, final List<SpellAbility> candidates, final String stage) {
-+        if (roles.isEmpty()) {
++        if (roles.isEmpty() || !rolePlayOn) {
 +            return null;
 +        }
 +        final Game game = ai.getGame();
@@ -523,7 +684,7 @@ index 00000000..ee90c315
 +
 +    /** Reactive protection stays in hand for the turn it matters: the combo turn or an answer to an opponent. */
 +    static boolean holdsProtection(final Player ai, final Card h) {
-+        if (roles.isEmpty() || h == null || !h.isInZone(ZoneType.Hand) || !hasRole(h, "protection")
++        if (roles.isEmpty() || !rolePlayOn || h == null || !h.isInZone(ZoneType.Hand) || !hasRole(h, "protection")
 +                || hasRole(h, "interaction") || h.isPermanent()) {
 +            return false;
 +        }
@@ -998,6 +1159,144 @@ index 00000000..ee90c315
 +
 +    private static final Map<Game, List<String>> JOURNAL = Collections.synchronizedMap(new WeakHashMap<>());
 +
++    /**
++     * The AI passes in its own main phase with an empty stack: journal each card in hand it could have cast, as
++     * "HELD name: useful a [why], ... | dead b [why] | reactive c", for the summary's count of cards it sat on.
++     * Dead: nothing to target, removal with no opponent's permanent to hit, a ritual with nothing to cast after it,
++     * a card the pilot's own combo plan holds back. Reactive: an instant or flash card kept for the others' turns.
++     */
++    public static void noteHeld(final Player ai, final Map<SpellAbility, String> filtered, final List<SpellAbility> kept) {
++        final Game game = ai.getGame();
++        if (JOURNAL.get(game) == null) {
++            return;
++        }
++        final List<SpellAbility> all = new ArrayList<>(kept);
++        all.addAll(filtered.keySet());
++        final List<String> useful = new ArrayList<>(), dead = new ArrayList<>(), reactive = new ArrayList<>();
++        final java.util.Set<Card> seen = new java.util.HashSet<>();
++        for (final SpellAbility sa : all) {
++            final Card h = sa.getHostCard();
++            if (h == null || !sa.isSpell() || !h.isInZone(ZoneType.Hand) || seen.contains(h)) {
++                continue;
++            }
++            try {
++                if (!sa.canPlay() || !ComputerUtilCost.canPayCost(sa, ai, false)) {
++                    continue;
++                }
++            } catch (final RuntimeException e) {
++                continue;
++            }
++            seen.add(h);
++            final String why = filtered.getOrDefault(sa, "declined");
++            final String kind = heldKind(ai, sa, all, why);
++            final String entry = h.getName() + " [" + why + "]";
++            ("dead".equals(kind) ? dead : "reactive".equals(kind) ? reactive : useful).add(entry);
++        }
++        if (seen.isEmpty()) {
++            return;
++        }
++        note(game, "HELD " + ai.getName() + " " + game.getPhaseHandler().getPhase() + ": useful " + String.join(", ", useful)
++                + " | dead " + String.join(", ", dead) + " | reactive " + String.join(", ", reactive));
++    }
++
++    /** Key choices made with lookahead, counted per game for the time cost (see the summary). */
++    public static void noteKey(final Player ai, final String what, final SpellAbility about) {
++        if (lookahead <= 0) {
++            return;
++        }
++        final Card c = about == null ? null : about.getHostCard();
++        note(ai.getGame(), "LOOK " + ai.getName() + " " + what + (c == null ? "" : ": " + c.getName()));
++    }
++
++    /** Rollouts per line on the key choices (cast or hold, counter or not, go for the win); 0 = no lookahead. */
++    public static volatile int lookahead = 0;
++
++    /**
++     * Castable cards in hand that would help now but that the heuristics did not pick (see {@link #heldKind}):
++     * the lookahead compares casting each with holding it, so a card that helps is not left in hand by a rule.
++     */
++    public static List<SpellAbility> heldUseful(final Player ai, final List<SpellAbility> all, final List<SpellAbility> taken) {
++        final List<SpellAbility> out = new ArrayList<>();
++        final java.util.Set<Card> seen = new java.util.HashSet<>();
++        for (final SpellAbility t : taken) {
++            if (t.getHostCard() != null) {
++                seen.add(t.getHostCard());
++            }
++        }
++        for (final SpellAbility sa : all) {
++            final Card h = sa.getHostCard();
++            if (h == null || !sa.isSpell() || h.isLand() || !h.isInZone(ZoneType.Hand) || seen.contains(h)) {
++                continue;
++            }
++            try {
++                if (!sa.canPlay() || !ComputerUtilCost.canPayCost(sa, ai, false)) {
++                    continue;
++                }
++            } catch (final RuntimeException e) {
++                continue;
++            }
++            if ("useful".equals(heldKind(ai, sa, all, "declined"))) {
++                seen.add(h);
++                out.add(sa);
++            }
++        }
++        // the dearest first: those are the plays a missed main phase costs the most
++        out.sort((a, b) -> Integer.compare(b.getHostCard().getCMC(), a.getHostCard().getCMC()));
++        return out.size() > 3 ? new ArrayList<>(out.subList(0, 3)) : out;
++    }
++
++    /** dead, reactive or useful: whether a castable card held in the AI's own main phase would help now. */
++    static String heldKind(final Player ai, final SpellAbility sa, final List<SpellAbility> all, final String why) {
++        final Card h = sa.getHostCard();
++        if ("heldForOracle".equals(why) || "heldWinner".equals(why) || "loopHeld".equals(why) || "heldForBreach".equals(why)
++                || "waiting".equals(why) || "deadOnArrival".equals(why)) {
++            return "dead"; // the combo plan keeps it for the turn it wins: not a card that helps on its own now
++        }
++        if (sa.usesTargeting() && sa.getTargetRestrictions() != null && !sa.getTargetRestrictions().hasCandidates(sa)) {
++            return "dead";
++        }
++        final String o = h.getOracleText().toLowerCase(java.util.Locale.ROOT);
++        final boolean instantSpeed = h.isInstant() || h.hasKeyword(forge.game.keyword.Keyword.FLASH);
++        if (instantSpeed && (hasRole(h, "interaction") || hasRole(h, "protection") || o.contains("counter target")
++                || o.contains("tutor") || o.contains("search your library") || o.contains("draw"))) {
++            return "reactive"; // kept up for the others' turns, where it does more
++        }
++        if (hasRole(h, "interaction") && sa.usesTargeting()) {
++            final forge.game.card.CardCollection theirs = new forge.game.card.CardCollection();
++            for (final Player opp : ai.getOpponents()) {
++                theirs.addAll(opp.getCardsIn(ZoneType.Battlefield));
++            }
++            if (forge.game.card.CardLists.getTargetableCards(theirs, sa).isEmpty()) {
++                return "dead"; // removal with nothing of the others' to hit
++            }
++        }
++        final boolean ritual = (o.contains("add {") || o.contains("add one mana") || o.contains("add three mana")
++                || o.contains("add two mana")) && (!h.isPermanent() || o.contains("sacrifice"));
++        if (ritual) {
++            // a ritual (or Lotus Petal) helps only when the mana it makes casts something the AI cannot cast now
++            final int open = forge.ai.ComputerUtilMana.getAvailableManaEstimate(ai, false);
++            final String made = o.substring(o.indexOf("add "));
++            final int stop = made.indexOf('.') < 0 ? made.length() : made.indexOf('.');
++            int gain = 0;
++            for (int i = made.indexOf('{'); i >= 0 && i < stop; i = made.indexOf('{', i + 1)) {
++                gain++;
++            }
++            if (gain == 0) {
++                gain = made.startsWith("add three") ? 3 : made.startsWith("add two") ? 2 : 1;
++            }
++            final int after = open - h.getCMC() + gain;
++            for (final SpellAbility other : all) {
++                final Card c = other.getHostCard();
++                if (c != null && c != h && other.isSpell() && c.isInZone(ZoneType.Hand) && !c.isLand()
++                        && c.getCMC() > open && c.getCMC() <= after) {
++                    return "useful";
++                }
++            }
++            return "dead";
++        }
++        return "useful";
++    }
++
 +    public static void resetJournal(final Game game) {
 +        JOURNAL.put(game, Collections.synchronizedList(new ArrayList<>()));
 +    }
@@ -1331,6 +1630,40 @@ index 00000000..16bb3c08
 +        return choose(ai, "counter", f, rule, "t" + host.getId());
 +    }
 +}
+diff --git a/forge-ai/src/main/java/forge/ai/simulation/FlatMonteCarloPicker.java b/forge-ai/src/main/java/forge/ai/simulation/FlatMonteCarloPicker.java
+index 6e3e15a6..8b859825 100644
+--- a/forge-ai/src/main/java/forge/ai/simulation/FlatMonteCarloPicker.java
++++ b/forge-ai/src/main/java/forge/ai/simulation/FlatMonteCarloPicker.java
+@@ -230,6 +230,29 @@ public final class FlatMonteCarloPicker {
+          */
+         public int lookaheadMaxCandidates = 0;
+ 
++        /**
++         * This configuration for a key choice (cast or hold a card that would help, counter or let resolve, go for the
++         * win now or wait): more rollouts per line, the next opponent's turn played out too, room for the extra lines
++         * and a bigger time budget. Routine choices keep the plain configuration.
++         */
++        public Config keyChoice(final int rollouts, final int extraLines) {
++            try {
++                final Config copy = (Config) clone();
++                copy.extraCandidates = extraCandidates + extraLines;
++                if (rollouts <= 0) {
++                    return copy; // no lookahead: only room for the extra lines
++                }
++                copy.rolloutsPerCandidate = Math.max(rolloutsPerCandidate, rollouts);
++                copy.opponentLookaheadPercent = Math.max(opponentLookaheadPercent, 35);
++                copy.lookaheadMaxCandidates = 0;
++                copy.budgetNanos = Math.max(budgetNanos * 3, TimeUnit.MILLISECONDS.toNanos(1200));
++                copy.scaleToDevice = false;
++                return copy;
++            } catch (final CloneNotSupportedException e) {
++                return this;
++            }
++        }
++
+         /** This configuration for a decision with this many candidates: the lookahead is dropped when it is too many. */
+         Config forDecision(final int candidates) {
+             if (opponentLookaheadPercent <= 0 || lookaheadMaxCandidates <= 0 || candidates <= lookaheadMaxCandidates) {
 diff --git a/forge-ai/src/main/java/forge/ai/simulation/OpeningHand.java b/forge-ai/src/main/java/forge/ai/simulation/OpeningHand.java
 index 2a4ee9b4..6ea2be21 100644
 --- a/forge-ai/src/main/java/forge/ai/simulation/OpeningHand.java
@@ -1388,10 +1721,10 @@ index 2a4ee9b4..6ea2be21 100644
          return !(size >= 6 && lands >= size - 1);
 diff --git a/forge-gui-desktop/src/main/java/forge/view/CedhSim.java b/forge-gui-desktop/src/main/java/forge/view/CedhSim.java
 new file mode 100644
-index 00000000..8008f6ed
+index 00000000..87c04545
 --- /dev/null
 +++ b/forge-gui-desktop/src/main/java/forge/view/CedhSim.java
-@@ -0,0 +1,758 @@
+@@ -0,0 +1,760 @@
 +package forge.view;
 +
 +import java.io.File;
@@ -1582,6 +1915,8 @@ index 00000000..8008f6ed
 +        CedhPilot.enabled = !p.containsKey("plainai");
 +        CedhPilot.loadModel(p.containsKey("model") ? p.get("model").get(0) : null);
 +        CedhPilot.loadRoles(p.containsKey("roles") ? p.get("roles").get(0) : null);
++        CedhPilot.rolePlayOn = p.containsKey("roleplay");
++        CedhPilot.lookahead = p.containsKey("lookahead") ? Integer.parseInt(p.get("lookahead").get(0)) : 0;
 +        final boolean styles = !p.containsKey("nostyles");
 +        CedhPilot.imperfection = p.containsKey("slip") ? Double.parseDouble(p.get("slip").get(0)) : 0.03;
 +        forge.ai.simulation.Decisions.explore = p.containsKey("explore") ? Double.parseDouble(p.get("explore").get(0)) : 0;

@@ -26,6 +26,18 @@
   and 9 games against 11 without it, and drew 22 to 26 games against 16.
 - About 120 cEDH staples the rules-text patterns missed have a role by name (Toxic Deluge, Show and Tell,
   Mother of Runes, Torpor Orb and others).
+- The AI no longer sits on cards that would help. A castable card in hand that the heuristics pass over is now
+  judged against the board: dead (nothing to target, removal with no opposing permanent to hit, a ritual or Lotus
+  Petal whose mana would cast nothing new, a piece the combo plan holds for its turn), reactive (an instant kept
+  for the others' turns) or useful. Useful ones go into the rollouts as lines of their own against holding, so the
+  search decides instead of a rule. Game journals note each pass with `HELD` (useful, dead, reactive and why).
+- Lookahead on the key choices (`--lookahead N`, default 4 rollouts per line, 0 = off): cast or hold in the second
+  main phase, counter or let a spell resolve, and casting Thassa's Oracle now or waiting when an opponent has cards
+  and mana to answer. These get more rollouts and play out the next opponent's turn; routine choices stay as they
+  were. Journals note each with `LOOK`. In 40 games at normal settings (seed 2026, same shuffles), roles off: 13
+  wins and 13 draws against 11 and 16 before, at 91 s of compute a game against 90 s; useful cards held fell from
+  about 20 a game to 9. With `--roles`: 11 wins and 22 draws, no better than before, at 118 s a game.
+- Card roles are always loaded (the AI uses them to judge its hand); `--roles` only turns on role play.
 
 ### Changed
 - Swap tests say when the card going out and the card coming in share no card type, so a creature-for-instant
