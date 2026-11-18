@@ -4,6 +4,11 @@ name: card data check
 # color identity, rules text). Runs by hand and whenever the card-data code or the pinned Forge changes.
 on:
   workflow_dispatch:
+    inputs:
+      names:
+        description: "Only these cards, separated by | (empty: every card)"
+        required: false
+        default: ""
   push:
     paths:
       - cedh_sim/carddata.py
@@ -31,7 +36,9 @@ jobs:
       - name: Compare with Scryfall
         run: |
           set -o pipefail
-          python -m cedh_sim check-cards --download --all --limit 0 | tee card-check.txt
+          python -m cedh_sim check-cards --download --all --limit 0 --names "$NAMES" | tee card-check.txt
+        env:
+          NAMES: ${{ github.event.inputs.names }}
       - uses: actions/upload-artifact@v4
         with:
           name: card-check

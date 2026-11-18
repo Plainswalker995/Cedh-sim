@@ -495,10 +495,19 @@ def cmd_check_cards(a) -> None:
     if not bulk:
         print("Card data vs the real cards: give --scryfall FILE (Scryfall's oracle-cards bulk file) or --download.")
         return
-    diffs = carddata.check_scryfall(bulk, None if a.all else names)
-    print(f"Card data vs Scryfall ({'all cards' if a.all else 'cards in these decks'}): {len(diffs)} differences")
+    if a.names:
+        names = {carddata.info(n)["name"] if carddata.info(n) else n for n in a.names.split("|") if n.strip()}
+    diffs = carddata.check_scryfall(bulk, None if a.all and not a.names else names)
+    print(f"Card data vs Scryfall ({'all cards' if a.all and not a.names else f'{len(names)} cards'}): "
+          f"{len(diffs)} differences")
     for d in diffs[: a.limit or None]:
         print(f"- {d['card']}: {d['problem'] or ''}" + (f" [Commander: {d['commander']}]" if d.get("commander") == "banned" else ""))
+    kinds = {}
+    for d in diffs:
+        for part in (d["problem"] or "banned").split("; "):
+            k = part.split(" ")[0] if not part.startswith("rules text") else "rules text"
+            kinds[k] = kinds.get(k, 0) + 1
+    print("By kind: " + ", ".join(f"{k} {v}" for k, v in sorted(kinds.items(), key=lambda x: -x[1])))
 
 
 def download_scryfall() -> Path:
@@ -567,6 +576,7 @@ def main(argv=None) -> None:
     p.add_argument("--scryfall", help="Scryfall's oracle-cards bulk file")
     p.add_argument("--download", action="store_true", help="download Scryfall's oracle-cards file first")
     p.add_argument("--all", action="store_true", help="compare every card, not only the cards in the decks")
+    p.add_argument("--names", help="compare only these cards, separated by |")
     p.add_argument("--limit", type=int, default=200, help="most differences to list (default 200, 0 for all)")
     p.set_defaults(func=cmd_check_cards)
 
