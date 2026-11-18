@@ -510,7 +510,11 @@ def download_scryfall() -> Path:
         raise SystemExit("Scryfall's bulk-data list has no oracle_cards file: " + json.dumps(listing)[:300])
     out = ROOT / "cache" / "scryfall-oracle-cards.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    with urllib.request.urlopen(req(meta["download_uri"]), timeout=300) as r:
+    url = meta.get("download_uri") or meta.get("download_url") or next(
+        (v for k, v in meta.items() if "download" in k and isinstance(v, str) and v.startswith("https://")), None)
+    if not url:
+        raise SystemExit("No download address in Scryfall's oracle_cards entry: " + json.dumps(meta)[:500])
+    with urllib.request.urlopen(req(url), timeout=300) as r:
         out.write_bytes(r.read())
     print(f"Scryfall oracle data from {meta.get('updated_at')}")
     return out
